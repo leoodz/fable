@@ -1,16 +1,19 @@
 // deno-lint-ignore-file no-explicit-any
 
-import { assertEquals, assertThrows } from '$std/testing/asserts.ts';
+import { assertEquals, assertThrows } from '$std/assert/mod.ts';
 
 import { FakeTime } from '$std/testing/time.ts';
 
 import { assertSpyCalls, returnsNext, stub } from '$std/testing/mock.ts';
 
+import utils from '../src/utils.ts';
+
 import packs from '../src/packs.ts';
-import user from '../src/user.ts';
 import trade from '../src/trade.ts';
 
 import config from '../src/config.ts';
+
+import db from '../db/mod.ts';
 
 import { Character, CharacterRole, MediaType } from '../src/types.ts';
 
@@ -19,7 +22,7 @@ import { AniListCharacter } from '../packs/anilist/types.ts';
 import { NonFetalError } from '../src/errors.ts';
 
 Deno.test('give', async (test) => {
-  await test.step('one character', async () => {
+  await test.step('normal', async () => {
     const character: AniListCharacter = {
       id: '1',
       description: 'description',
@@ -43,20 +46,9 @@ Deno.test('give', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                giveCharacters: {
-                  ok: true,
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -71,6 +63,42 @@ Deno.test('give', async (test) => {
         undefined,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => ({ ok: true }) as any,
     );
 
     const listStub = stub(
@@ -90,7 +118,6 @@ Deno.test('give', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1'],
       });
 
@@ -110,18 +137,16 @@ Deno.test('give', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 4);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[1].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[1].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[1].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -138,15 +163,15 @@ Deno.test('give', async (test) => {
       );
 
       assertEquals(
-        fetchStub.calls[3].args[0],
+        fetchStub.calls[2].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token',
       );
 
-      assertEquals(fetchStub.calls[3].args[1]?.method, 'POST');
+      assertEquals(fetchStub.calls[2].args[1]?.method, 'POST');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[3].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -206,196 +231,12 @@ Deno.test('give', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
-    }
-  });
 
-  await test.step('two characters', async () => {
-    const character: AniListCharacter = {
-      id: '1',
-      description: 'description',
-      name: {
-        full: 'title',
-      },
-      media: {
-        edges: [{
-          characterRole: CharacterRole.Main,
-          node: {
-            id: '2',
-            type: MediaType.Anime,
-            title: {
-              english: 'media',
-            },
-          },
-        }],
-      },
-    };
-
-    const timeStub = new FakeTime();
-
-    const fetchStub = stub(
-      globalThis,
-      'fetch',
-      returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                giveCharacters: {
-                  ok: true,
-                },
-              },
-            }))),
-        } as any,
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                Page: {
-                  characters: [character],
-                },
-              },
-            }))),
-        } as any,
-        undefined,
-        undefined,
-      ]),
-    );
-
-    const listStub = stub(
-      packs,
-      'all',
-      () => Promise.resolve([]),
-    );
-
-    const isDisabledStub = stub(packs, 'isDisabled', () => false);
-
-    config.appId = 'app_id';
-    config.origin = 'http://localhost:8000';
-
-    try {
-      const message = trade.give({
-        token: 'test_token',
-        userId: 'user_id',
-        targetId: 'target_id',
-        guildId: 'guild_id',
-        channelId: 'channel_id',
-        giveCharactersIds: ['anilist:1', 'anilist:1'],
-      });
-
-      assertEquals(message.json(), {
-        type: 4,
-        data: {
-          attachments: [],
-          components: [],
-          embeds: [{
-            type: 'rich',
-            image: {
-              url: 'http://localhost:8000/assets/spinner3.gif',
-            },
-          }],
-        },
-      });
-
-      await timeStub.runMicrotasks();
-
-      assertSpyCalls(fetchStub, 4);
-
-      assertEquals(
-        fetchStub.calls[2].args[0],
-        'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
-      );
-
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
-
-      assertEquals(
-        JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
-            'payload_json',
-          ) as any,
-        ),
-        {
-          attachments: [],
-          components: [],
-          embeds: [
-            {
-              type: 'rich',
-              description: 'Gift sent to <@target_id>!',
-            },
-          ],
-        },
-      );
-
-      assertEquals(
-        fetchStub.calls[3].args[0],
-        'https://discord.com/api/v10/webhooks/app_id/test_token',
-      );
-
-      assertEquals(fetchStub.calls[3].args[1]?.method, 'POST');
-
-      assertEquals(
-        JSON.parse(
-          (fetchStub.calls[3].args[1]?.body as FormData)?.get(
-            'payload_json',
-          ) as any,
-        ),
-        {
-          content: '<@target_id>',
-          attachments: [],
-          components: [],
-          embeds: [
-            {
-              type: 'rich',
-              description: '<@user_id> sent you a gift',
-            },
-            {
-              type: 'rich',
-              description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
-              fields: [
-                {
-                  name: 'media',
-                  value: '**title**',
-                },
-                {
-                  name: '\u200B',
-                  value: '<:add:1099004747123523644>',
-                },
-              ],
-              thumbnail: {
-                url: 'http://localhost:8000/external/?size=thumbnail',
-              },
-            },
-            {
-              type: 'rich',
-              description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
-              fields: [
-                {
-                  name: 'media',
-                  value: '**title**',
-                },
-                {
-                  name: '\u200B',
-                  value: '<:add:1099004747123523644>',
-                },
-              ],
-              thumbnail: {
-                url: 'http://localhost:8000/external/?size=thumbnail',
-              },
-            },
-          ],
-        },
-      );
-    } finally {
-      delete config.appId;
-      delete config.origin;
-
-      timeStub.restore();
-      fetchStub.restore();
-      listStub.restore();
-      isDisabledStub.restore();
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 
@@ -421,21 +262,9 @@ Deno.test('give', async (test) => {
     };
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                giveCharacters: {
-                  ok: false,
-                  error: 'CHARACTER_NOT_FOUND',
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -449,6 +278,44 @@ Deno.test('give', async (test) => {
         } as any,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => {
+        throw new Error('CHARACTER_NOT_FOUND');
+      },
     );
 
     const listStub = stub(
@@ -470,7 +337,6 @@ Deno.test('give', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1', 'anilist:1'],
       });
 
@@ -490,18 +356,16 @@ Deno.test('give', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 3);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[0].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -511,7 +375,8 @@ Deno.test('give', async (test) => {
           embeds: [
             {
               type: 'rich',
-              description: 'Some of those characters were disabled or removed',
+              description:
+                'Some of those characters do not exist or are disabled',
             },
           ],
         },
@@ -524,6 +389,12 @@ Deno.test('give', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 
@@ -549,21 +420,9 @@ Deno.test('give', async (test) => {
     };
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                giveCharacters: {
-                  ok: false,
-                  error: 'CHARACTER_NOT_OWNED',
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -577,6 +436,44 @@ Deno.test('give', async (test) => {
         } as any,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => {
+        throw new Error('CHARACTER_NOT_OWNED');
+      },
     );
 
     const listStub = stub(
@@ -598,7 +495,6 @@ Deno.test('give', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1', 'anilist:1'],
       });
 
@@ -618,18 +514,16 @@ Deno.test('give', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 3);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[0].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -652,6 +546,12 @@ Deno.test('give', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 
@@ -677,21 +577,9 @@ Deno.test('give', async (test) => {
     };
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                giveCharacters: {
-                  ok: false,
-                  error: 'CHARACTER_IN_PARTY',
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -705,6 +593,44 @@ Deno.test('give', async (test) => {
         } as any,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => {
+        throw new Error('CHARACTER_IN_PARTY');
+      },
     );
 
     const listStub = stub(
@@ -726,7 +652,6 @@ Deno.test('give', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1', 'anilist:1'],
       });
 
@@ -746,18 +671,16 @@ Deno.test('give', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 3);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[0].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -781,6 +704,12 @@ Deno.test('give', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 });
@@ -830,20 +759,9 @@ Deno.test('trade', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                tradeCharacters: {
-                  ok: true,
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -858,6 +776,42 @@ Deno.test('trade', async (test) => {
         undefined,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => ({ ok: true }) as any,
     );
 
     const listStub = stub(
@@ -877,7 +831,6 @@ Deno.test('trade', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1', 'anilist:1'],
         takeCharactersIds: ['anilist:2', 'anilist:2'],
       });
@@ -898,18 +851,16 @@ Deno.test('trade', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 4);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[1].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[1].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[1].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -999,15 +950,15 @@ Deno.test('trade', async (test) => {
       );
 
       assertEquals(
-        fetchStub.calls[3].args[0],
+        fetchStub.calls[2].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token',
       );
 
-      assertEquals(fetchStub.calls[3].args[1]?.method, 'POST');
+      assertEquals(fetchStub.calls[2].args[1]?.method, 'POST');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[3].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -1026,6 +977,12 @@ Deno.test('trade', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 
@@ -1071,21 +1028,9 @@ Deno.test('trade', async (test) => {
     };
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                tradeCharacters: {
-                  ok: false,
-                  error: 'CHARACTER_NOT_FOUND',
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -1099,6 +1044,44 @@ Deno.test('trade', async (test) => {
         } as any,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => {
+        throw new Error('CHARACTER_NOT_FOUND');
+      },
     );
 
     const listStub = stub(
@@ -1120,7 +1103,7 @@ Deno.test('trade', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
+
         giveCharactersIds: ['anilist:1', 'anilist:1'],
         takeCharactersIds: ['anilist:2', 'anilist:2'],
       });
@@ -1141,18 +1124,16 @@ Deno.test('trade', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 3);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[0].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -1162,7 +1143,8 @@ Deno.test('trade', async (test) => {
           embeds: [
             {
               type: 'rich',
-              description: 'Some of those characters were disabled or removed',
+              description:
+                'Some of those characters do not exist or are disabled',
             },
           ],
         },
@@ -1175,6 +1157,12 @@ Deno.test('trade', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 
@@ -1220,21 +1208,9 @@ Deno.test('trade', async (test) => {
     };
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                tradeCharacters: {
-                  ok: false,
-                  error: 'CHARACTER_NOT_OWNED',
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -1248,6 +1224,44 @@ Deno.test('trade', async (test) => {
         } as any,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => {
+        throw new Error('CHARACTER_NOT_OWNED');
+      },
     );
 
     const listStub = stub(
@@ -1269,7 +1283,6 @@ Deno.test('trade', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1', 'anilist:1'],
         takeCharactersIds: ['anilist:2', 'anilist:2'],
       });
@@ -1290,18 +1303,16 @@ Deno.test('trade', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 3);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[0].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -1324,6 +1335,12 @@ Deno.test('trade', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 
@@ -1369,21 +1386,9 @@ Deno.test('trade', async (test) => {
     };
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       returnsNext([
-        {
-          ok: true,
-          text: (() =>
-            Promise.resolve(JSON.stringify({
-              data: {
-                tradeCharacters: {
-                  ok: false,
-                  error: 'CHARACTER_IN_PARTY',
-                },
-              },
-            }))),
-        } as any,
         {
           ok: true,
           text: (() =>
@@ -1397,6 +1402,44 @@ Deno.test('trade', async (test) => {
         } as any,
         undefined,
       ]),
+    );
+
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const tradeCharactersStub = stub(
+      db,
+      'tradeCharacters',
+      () => {
+        throw new Error('CHARACTER_IN_PARTY');
+      },
     );
 
     const listStub = stub(
@@ -1418,7 +1461,6 @@ Deno.test('trade', async (test) => {
         userId: 'user_id',
         targetId: 'target_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         giveCharactersIds: ['anilist:1', 'anilist:1'],
         takeCharactersIds: ['anilist:2', 'anilist:2'],
       });
@@ -1439,18 +1481,16 @@ Deno.test('trade', async (test) => {
 
       await timeStub.runMicrotasks();
 
-      assertSpyCalls(fetchStub, 3);
-
       assertEquals(
-        fetchStub.calls[2].args[0],
+        fetchStub.calls[0].args[0],
         'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
       );
 
-      assertEquals(fetchStub.calls[2].args[1]?.method, 'PATCH');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[2].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -1473,6 +1513,12 @@ Deno.test('trade', async (test) => {
       fetchStub.restore();
       listStub.restore();
       isDisabledStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      tradeCharactersStub.restore();
     }
   });
 });
@@ -1511,8 +1557,8 @@ Deno.test('/give', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -1522,28 +1568,67 @@ Deno.test('/give', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
-      () =>
-        Promise.resolve({
-          characters: [
-            {
+      returnsNext([
+        [
+          {
+            value: {
               id: 'id:1',
-              user: { id: 'user_id' },
               mediaId: 'media_id',
               rating: 2,
             },
-            {
+          },
+          {
+            value: {
               id: 'id:2',
-              user: { id: 'user_id' },
               mediaId: 'media_id',
               rating: 2,
             },
-          ],
-          likes: [],
-          party: {},
-        }),
+          },
+        ] as any,
+        [] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {} as any,
+        {} as any,
+      ]),
     );
 
     config.trading = true;
@@ -1554,10 +1639,9 @@ Deno.test('/give', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['give_character_id', 'give_character_id2'],
+        give: ['id:1', 'id:2'],
         take: [],
       });
 
@@ -1666,8 +1750,14 @@ Deno.test('/give', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 
@@ -1675,7 +1765,7 @@ Deno.test('/give', async (test) => {
     const message = trade.pre({
       userId: 'user_id',
       guildId: 'guild_id',
-      channelId: 'channel_id',
+
       token: 'test_token',
       targetId: 'user_id',
       give: ['give_character_id'],
@@ -1729,8 +1819,8 @@ Deno.test('/give', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -1740,15 +1830,52 @@ Deno.test('/give', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
-      () =>
-        Promise.resolve({
-          characters: [],
-          likes: [],
-          party: {},
-        }),
+      returnsNext([
+        [] as any,
+        [] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {} as any,
+        {} as any,
+      ]),
     );
 
     config.trading = true;
@@ -1759,10 +1886,9 @@ Deno.test('/give', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['give_character_id', 'give_character_id2'],
+        give: ['id:1', 'id:2'],
         take: [],
       });
 
@@ -1848,8 +1974,14 @@ Deno.test('/give', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 
@@ -1886,8 +2018,8 @@ Deno.test('/give', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -1897,28 +2029,70 @@ Deno.test('/give', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
-      () =>
-        Promise.resolve({
-          characters: [],
-          likes: [],
-          party: {
-            member1: {
+      returnsNext([
+        [
+          {
+            value: {
               id: 'id:1',
               mediaId: 'media_id',
-              user: { id: 'user_id' },
-              rating: 1,
-            },
-            member5: {
-              id: 'id:2',
-              mediaId: 'media_id',
-              user: { id: 'user_id' },
-              rating: 1,
+              rating: 2,
             },
           },
-        }),
+          {
+            value: {
+              id: 'id:2',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+        [] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {
+          member1: { id: 'id:1' },
+          member5: { id: 'id:2' },
+        } as any,
+        {} as any,
+      ]),
     );
 
     config.trading = true;
@@ -1929,10 +2103,9 @@ Deno.test('/give', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['give_character_id', 'give_character_id2'],
+        give: ['id:1', 'id:2'],
         take: [],
       });
 
@@ -1978,7 +2151,7 @@ Deno.test('/give', async (test) => {
             {
               type: 'rich',
               description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
+                '<:star:1061016362832642098><:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
               thumbnail: {
                 url: 'http://localhost:8000/external/image_url?size=thumbnail',
               },
@@ -1996,7 +2169,7 @@ Deno.test('/give', async (test) => {
             {
               type: 'rich',
               description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
+                '<:star:1061016362832642098><:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
               thumbnail: {
                 url: 'http://localhost:8000/external/image_url2?size=thumbnail',
               },
@@ -2018,8 +2191,14 @@ Deno.test('/give', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 });
@@ -2047,8 +2226,8 @@ Deno.test('/trade', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -2058,30 +2237,67 @@ Deno.test('/trade', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
       returnsNext([
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'user_id' },
-            mediaId: 'media_id',
-            rating: 2,
-          }],
-          likes: [],
-          party: {},
-        }),
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'another_user_id' },
-            mediaId: 'media_id',
-            rating: 2,
-          }],
-          likes: [],
-          party: {},
-        }),
+        [
+          {
+            value: {
+              id: 'id:1',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+        [
+          {
+            value: {
+              id: 'id:1',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {} as any,
+        {} as any,
       ]),
     );
 
@@ -2093,11 +2309,10 @@ Deno.test('/trade', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['pack-id:give_character_id'],
-        take: ['pack-id:take_character_id'],
+        give: ['id:1'],
+        take: ['id:1'],
       });
 
       assertEquals(message.json(), {
@@ -2227,218 +2442,14 @@ Deno.test('/trade', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
-    }
-  });
 
-  await test.step('liked', async () => {
-    const character: Character = {
-      id: '1',
-      packId: 'id',
-      description: 'long description',
-      name: {
-        english: 'full name',
-      },
-      images: [{
-        url: 'image_url',
-      }],
-    };
-
-    const characterStub = stub(
-      packs,
-      'characters',
-      () => Promise.resolve([character]),
-    );
-
-    const timeStub = new FakeTime();
-
-    const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => undefined as any,
-    );
-
-    const aggregateStub = stub(
-      packs,
-      'aggregate',
-      ({ character }) => Promise.resolve(character),
-    );
-
-    const userStub = stub(
-      user,
-      'getUserCharacters',
-      returnsNext([
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [],
-          party: {},
-        }),
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'another_user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [{ characterId: 'id:1' }],
-          party: {},
-        }),
-      ]),
-    );
-
-    config.trading = true;
-    config.appId = 'app_id';
-    config.origin = 'http://localhost:8000';
-
-    try {
-      const message = trade.pre({
-        userId: 'user_id',
-        guildId: 'guild_id',
-        channelId: 'channel_id',
-        token: 'test_token',
-        targetId: 'another_user_id',
-        give: ['pack-id:give_character_id'],
-        take: ['pack-id:take_character_id'],
-      });
-
-      assertEquals(message.json(), {
-        type: 4,
-        data: {
-          attachments: [],
-          components: [],
-          embeds: [{
-            type: 'rich',
-            image: {
-              url: 'http://localhost:8000/assets/spinner3.gif',
-            },
-          }],
-        },
-      });
-
-      await timeStub.runMicrotasks();
-
-      assertSpyCalls(fetchStub, 2);
-
-      assertEquals(
-        fetchStub.calls[0].args[0],
-        'https://discord.com/api/v10/webhooks/app_id/test_token/messages/@original',
-      );
-
-      assertEquals(fetchStub.calls[0].args[1]?.method, 'PATCH');
-
-      assertEquals(
-        JSON.parse(
-          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
-            'payload_json',
-          ) as any,
-        ),
-        {
-          content: '<@another_user_id>',
-          attachments: [],
-          embeds: [
-            {
-              type: 'rich',
-              description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
-              thumbnail: {
-                url: 'http://localhost:8000/external/image_url?size=thumbnail',
-              },
-              fields: [
-                {
-                  name: 'full name\n\u200B',
-                  value: '\u200B',
-                },
-                {
-                  name: '\u200B',
-                  value: '<:remove:1099004424111792158>',
-                },
-              ],
-            },
-            {
-              type: 'rich',
-              description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
-              thumbnail: {
-                url: 'http://localhost:8000/external/image_url?size=thumbnail',
-              },
-              fields: [
-                {
-                  name: 'full name\n\u200B',
-                  value: '\u200B',
-                },
-                {
-                  name: '\u200B',
-                  value: '<:add:1099004747123523644>',
-                },
-              ],
-            },
-            {
-              type: 'rich',
-              description:
-                '<@user_id> is offering that you lose **full name** <:remove:1099004424111792158> and get **full name** <:add:1099004747123523644>',
-            },
-          ],
-          components: [
-            {
-              type: 1,
-              components: [
-                {
-                  custom_id: 'trade=user_id=another_user_id=id:1=id:1',
-                  label: 'Accept',
-                  style: 2,
-                  type: 2,
-                },
-                {
-                  custom_id: 'cancel=user_id=another_user_id',
-                  label: 'Decline',
-                  style: 4,
-                  type: 2,
-                },
-              ],
-            },
-          ],
-        },
-      );
-
-      assertEquals(
-        fetchStub.calls[1].args[0],
-        'https://discord.com/api/v10/webhooks/app_id/test_token',
-      );
-
-      assertEquals(fetchStub.calls[1].args[1]?.method, 'POST');
-
-      assertEquals(
-        JSON.parse(
-          (fetchStub.calls[1].args[1]?.body as FormData)?.get(
-            'payload_json',
-          ) as any,
-        ),
-        {
-          content: '<@another_user_id> you received an offer!',
-          attachments: [],
-          components: [],
-          embeds: [{
-            type: 'rich',
-            description: 'Some of those characters are in your likeslist!',
-          }],
-        },
-      );
-    } finally {
-      delete config.appId;
-      delete config.origin;
-      delete config.trading;
-
-      timeStub.restore();
-      characterStub.restore();
-      aggregateStub.restore();
-      userStub.restore();
-      fetchStub.restore();
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 
@@ -2464,8 +2475,8 @@ Deno.test('/trade', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -2475,30 +2486,67 @@ Deno.test('/trade', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
       returnsNext([
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [],
-          party: {},
-        }),
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'another_user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [],
-          party: {},
-        }),
+        [
+          {
+            value: {
+              id: 'id:1',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+        [
+          {
+            value: {
+              id: 'id:1',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {} as any,
+        {} as any,
       ]),
     );
 
@@ -2510,11 +2558,11 @@ Deno.test('/trade', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
+
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['give_character_id', 'give_character_id'],
-        take: ['take_character_id', 'take_character_id'],
+        give: ['id:1', 'id:1'],
+        take: ['id:1', 'id:1'],
       });
 
       assertEquals(message.json(), {
@@ -2555,7 +2603,7 @@ Deno.test('/trade', async (test) => {
             {
               type: 'rich',
               description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
+                '<:star:1061016362832642098><:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
               thumbnail: {
                 url: 'http://localhost:8000/external/image_url?size=thumbnail',
               },
@@ -2573,7 +2621,7 @@ Deno.test('/trade', async (test) => {
             {
               type: 'rich',
               description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
+                '<:star:1061016362832642098><:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
               thumbnail: {
                 url: 'http://localhost:8000/external/image_url?size=thumbnail',
               },
@@ -2644,8 +2692,14 @@ Deno.test('/trade', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 
@@ -2671,8 +2725,8 @@ Deno.test('/trade', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -2682,25 +2736,59 @@ Deno.test('/trade', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
       returnsNext([
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [],
-          party: {},
-        }),
-        Promise.resolve({
-          characters: [],
-          likes: [],
-          party: {},
-        }),
+        [
+          {
+            value: {
+              id: 'id:1',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+        [] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {} as any,
+        {} as any,
       ]),
     );
 
@@ -2712,11 +2800,11 @@ Deno.test('/trade', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
+
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['give_character_id'],
-        take: ['take_character_id'],
+        give: ['id:1'],
+        take: ['id:1'],
       });
 
       assertEquals(message.json(), {
@@ -2783,8 +2871,14 @@ Deno.test('/trade', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 
@@ -2810,8 +2904,8 @@ Deno.test('/trade', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -2821,37 +2915,69 @@ Deno.test('/trade', async (test) => {
       ({ character }) => Promise.resolve(character),
     );
 
-    const userStub = stub(
-      user,
+    const getGuildStub = stub(
+      db,
+      'getGuild',
+      () => 'guild' as any,
+    );
+
+    const getInstanceStub = stub(
+      db,
+      'getInstance',
+      () => 'instance' as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      returnsNext([
+        'user' as any,
+        'targetUser' as any,
+      ]),
+    );
+
+    const getInventoryStub = stub(
+      db,
+      'getInventory',
+      returnsNext([
+        { inventory: 'inventory' } as any,
+        { inventory: 'targetInventory' } as any,
+      ]),
+    );
+
+    const getUserCharactersStub = stub(
+      db,
       'getUserCharacters',
       returnsNext([
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [],
-          party: {},
-        }),
-        Promise.resolve({
-          characters: [{
-            id: 'id:1',
-            user: { id: 'another_user_id' },
-            mediaId: 'media_id',
-            rating: 1,
-          }],
-          likes: [],
-          party: {
-            member1: {
+        [
+          {
+            value: {
               id: 'id:1',
               mediaId: 'media_id',
-              user: { id: 'another_user_id' },
-              rating: 1,
+              rating: 2,
             },
           },
-        }),
+        ] as any,
+        [
+          {
+            value: {
+              id: 'id:1',
+              mediaId: 'media_id',
+              rating: 2,
+            },
+          },
+        ] as any,
+      ]),
+    );
+
+    const getUserPartyStub = stub(
+      db,
+      'getUserParty',
+      returnsNext([
+        {} as any,
+        {
+          member1: { id: 'id:1' },
+        } as any,
       ]),
     );
 
@@ -2863,11 +2989,10 @@ Deno.test('/trade', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['pack-id:give_character_id'],
-        take: ['pack-id:take_character_id'],
+        give: ['id:1'],
+        take: ['od:1'],
       });
 
       assertEquals(message.json(), {
@@ -2913,7 +3038,7 @@ Deno.test('/trade', async (test) => {
             {
               type: 'rich',
               description:
-                '<:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
+                '<:star:1061016362832642098><:star:1061016362832642098><:no_star:1109377526662434906><:no_star:1109377526662434906><:no_star:1109377526662434906>',
               thumbnail: {
                 url: 'http://localhost:8000/external/image_url?size=thumbnail',
               },
@@ -2935,8 +3060,14 @@ Deno.test('/trade', async (test) => {
       timeStub.restore();
       characterStub.restore();
       aggregateStub.restore();
-      userStub.restore();
       fetchStub.restore();
+
+      getGuildStub.restore();
+      getInstanceStub.restore();
+      getUserStub.restore();
+      getInventoryStub.restore();
+      getUserPartyStub.restore();
+      getUserCharactersStub.restore();
     }
   });
 
@@ -2944,11 +3075,10 @@ Deno.test('/trade', async (test) => {
     const message = trade.pre({
       userId: 'user_id',
       guildId: 'guild_id',
-      channelId: 'channel_id',
       token: 'test_token',
       targetId: 'user_id',
-      give: ['give_character_id'],
-      take: ['take_character_id'],
+      give: ['id:1'],
+      take: ['id:1'],
     });
 
     assertEquals(message.json(), {
@@ -2975,8 +3105,8 @@ Deno.test('/trade', async (test) => {
     const timeStub = new FakeTime();
 
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => undefined as any,
     );
 
@@ -2988,11 +3118,10 @@ Deno.test('/trade', async (test) => {
       const message = trade.pre({
         userId: 'user_id',
         guildId: 'guild_id',
-        channelId: 'channel_id',
         token: 'test_token',
         targetId: 'another_user_id',
-        give: ['give_character_id'],
-        take: ['take_character_id'],
+        give: ['id:1'],
+        take: ['id:1'],
       });
 
       assertEquals(message.json(), {
@@ -3033,7 +3162,7 @@ Deno.test('/trade', async (test) => {
             {
               type: 'rich',
               description:
-                'Some of those character do not exist or are disabled',
+                'Some of those characters do not exist or are disabled',
             },
           ],
         },
@@ -3058,7 +3187,7 @@ Deno.test('/trade', async (test) => {
           trade.pre({
             userId: 'user_id',
             guildId: 'guild_id',
-            channelId: 'channel_id',
+
             token: 'test_token',
             targetId: 'another_user_id',
             give: ['character_id'],

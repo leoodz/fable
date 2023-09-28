@@ -1,17 +1,25 @@
 import nacl from 'tweetnacl';
 
-import {
-  decode as base64Decode,
-  encode as base64Encode,
-} from 'url-safe-base64';
+import { chunk } from '$std/collections/chunk.ts';
 
-import { captureException, init as initSentry } from 'sentry';
+import {
+  captureException as _captureException,
+  init as initSentry,
+} from 'sentry';
+
+import { LRU } from 'lru';
 
 import { json, serve, serveStatic, validateRequest } from 'sift';
 
 import { distance as _distance } from 'levenshtein';
 
-import { RECHARGE_MINS } from '../models/get_user_inventory.ts';
+import { proxy } from '../images-proxy/mod.ts';
+
+import { RECHARGE_MINS } from '../db/mod.ts';
+
+const TEN_MIB = 1024 * 1024 * 10;
+
+const lru = new LRU<{ body: ArrayBuffer; headers: Headers }>(20);
 
 export enum ImageSize {
   Preview = 'preview',
@@ -24,6 +32,27 @@ function getRandomFloat(): number {
   const randomInt = crypto.getRandomValues(new Uint32Array(1))[0];
   return randomInt / 2 ** 32;
 }
+
+// function randomPortions(
+//   min: number,
+//   max: number,
+//   length: number,
+//   sum: number,
+// ): number[] {
+//   return Array.from({ length }, (_, i) => {
+//     const smin = (length - i - 1) * min;
+//     const smax = (length - i - 1) * max;
+
+//     const offset = Math.max(sum - smax, min);
+//     const random = 1 + Math.min(sum - offset, max - offset, sum - smin - min);
+
+//     const value = Math.floor(Math.random() * random + offset);
+
+//     sum -= value;
+
+//     return value;
+//   });
+// }
 
 function hexToInt(hex?: string): number | undefined {
   if (!hex) {
@@ -54,6 +83,28 @@ function shuffle<T>(array: T[]): void {
 
 function sleep(secs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, secs * 1000));
+}
+
+function fetchWithRetry(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  n = 0,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    fetch(input, init)
+      .then((result) => resolve(result))
+      .catch(async (err) => {
+        if (n >= 2) {
+          return reject(err);
+        }
+
+        await sleep(0.5);
+
+        fetchWithRetry(input, init, n + 1)
+          .then(resolve)
+          .catch(reject);
+      });
+  });
 }
 
 function rng<T>(dict: { [chance: number]: T }): { value: T; chance: number } {
@@ -125,16 +176,31 @@ function capitalize(s: string | undefined): string | undefined {
     .trim();
 }
 
+function compact(n: number): string {
+  if (n <= 0) {
+    return '0';
+  }
+
+  const units = ['', 'K', 'M', 'G', 'T', 'P', 'E'];
+  const index = Math.floor(Math.log10(Math.abs(n)) / 3);
+  const value = n / Math.pow(10, index * 3);
+
+  const formattedValue = value.toFixed(1)
+    .replace(/\.0+$/, '');
+
+  return formattedValue + units[index];
+}
+
 function comma(n: number): string {
   return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-function chunks<T>(a: Array<T>, size: number): T[][] {
-  return Array.from(
-    new Array(Math.ceil(a.length / size)),
-    (_, i) => a.slice(i * size, i * size + size),
-  );
-}
+// function chunks<T>(a: Array<T>, size: number): T[][] {
+//   return Array.from(
+//     new Array(Math.ceil(a.length / size)),
+//     (_, i) => a.slice(i * size, i * size + size),
+//   );
+// }
 
 function distance(a: string, b: string): number {
   return 100 -
@@ -263,6 +329,31 @@ function diffInDays(a: Date, b: Date): number {
   return Math.floor(Math.abs(a.getTime() - b.getTime()) / 3600000 / 24);
 }
 
+function diffInMinutes(a: Date, b: Date): number {
+  return Math.floor(Math.abs(a.getTime() - b.getTime()) / 60000);
+}
+
+const base64Encode = (base64: string): string => {
+  const ENC = {
+    '+': '-',
+    '/': '_',
+  };
+
+  return base64
+    .replace(/[+/]/g, (m) => ENC[m as keyof typeof ENC]);
+};
+
+const base64Decode = (safe: string): string => {
+  const DEC = {
+    '-': '+',
+    '_': '/',
+    '.': '=',
+  };
+
+  return safe
+    .replace(/[-_.]/g, (m) => DEC[m as keyof typeof DEC]);
+};
+
 function cipher(str: string, secret: number): string {
   let b = '';
 
@@ -293,6 +384,63 @@ function decipher(a: string, secret: number): string {
   return str;
 }
 
+function captureException(err: Error, opts?: {
+  // deno-lint-ignore no-explicit-any
+  extra?: any;
+}): string {
+  return _captureException(err, {
+    extra: {
+      ...err.cause ?? {},
+      ...opts?.extra ?? {},
+    },
+  });
+}
+
+async function handleProxy(r: Request): Promise<Response> {
+  const url = new URL(r.url);
+
+  const key = (url.pathname + url.search)
+    .substring(1);
+
+  const hit = lru.get(key);
+
+  if (hit) {
+    console.log(`cache hit: ${key}`);
+
+    return new Response(hit.body, { headers: hit.headers });
+  }
+
+  const imageUrl = decodeURIComponent(
+    url.pathname
+      .replace('/external/', ''),
+  );
+
+  const { format, image } = await proxy(
+    imageUrl,
+    // deno-lint-ignore no-explicit-any
+    url.searchParams.get('size') as any,
+  );
+
+  const response = new Response(image.buffer, {
+    headers: {
+      'content-type': format,
+      'content-length': `${image.byteLength}`,
+      'cache-control': `max-age=${86400 * 12}`,
+    },
+  });
+
+  if (image.byteLength <= TEN_MIB) {
+    const v = {
+      body: image.buffer,
+      headers: response.headers,
+    };
+
+    lru.set(key, v);
+  }
+
+  return response;
+}
+
 function captureOutage(id: string): Promise<Response> {
   return fetch(
     `https://api.instatus.com/v3/integrations/webhook/${id}`,
@@ -309,17 +457,23 @@ const utils = {
   capitalize,
   captureException,
   captureOutage,
-  chunks,
+  chunks: chunk,
   cipher,
   comma,
+  compact,
   decipher,
   decodeDescription,
+  diffInDays,
+  diffInMinutes,
   distance,
+  fetchWithRetry,
+  getRandomFloat,
+  handleProxy,
   hexToInt,
   initSentry,
   json,
   parseInt: _parseInt,
-  diffInDays,
+  // randomPortions,
   readJson,
   rechargeTimestamp,
   rng,
@@ -327,12 +481,11 @@ const utils = {
   serveStatic,
   shuffle,
   sleep,
+  stealTimestamp,
   truncate,
   validateRequest,
   verifySignature,
   votingTimestamp,
-  stealTimestamp,
-  getRandomFloat,
   wrap,
 };
 

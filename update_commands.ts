@@ -4,33 +4,30 @@ import { load as Dotenv } from '$std/dotenv/mod.ts';
 
 import { green } from '$std/fmt/colors.ts';
 
-try {
-  await Dotenv({ export: true, allowEmptyValues: true });
-} catch {
-  //
-}
+import { AvailableLocales } from './src/discord.ts';
+
+import EN from './i18n/en-US.json' assert { type: 'json' };
+import ES from './i18n/es-ES.json' assert { type: 'json' };
+
+await Dotenv({
+  export: true,
+  defaultsPath: '.env.example',
+  allowEmptyValues: true,
+  examplePath: null,
+});
 
 enum CommandType {
   'CHAT' = 1,
   'USER' = 2,
 }
 
-const spots = [{
-  name: '1',
-  value: 1,
-}, {
-  name: '2',
-  value: 2,
-}, {
-  name: '3',
-  value: 3,
-}, {
-  name: '4',
-  value: 4,
-}, {
-  name: '5',
-  value: 5,
-}];
+const spots = [
+  { name: '1', value: 1 },
+  { name: '2', value: 2 },
+  { name: '3', value: 3 },
+  { name: '4', value: 4 },
+  { name: '5', value: 5 },
+];
 
 enum Type {
   'SUB_COMMAND' = 1,
@@ -52,6 +49,17 @@ enum Permission {
   'MANAGE_GUILD' = 1 << 5,
 }
 
+type LocalizationString = Partial<Record<AvailableLocales, string>>;
+
+type Command = {
+  type?: CommandType;
+  name: string;
+  description?: string;
+  options?: ReturnType<typeof Option>[];
+  aliases?: string[];
+  defaultPermission?: Permission;
+};
+
 type Option = {
   type: Type;
   name: string;
@@ -60,22 +68,13 @@ type Option = {
   options?: Option[];
   choices?: Choice[];
   optional?: boolean;
-  aliases?: (string | { name: string; desc: string })[];
   min_value?: number;
   max_value?: number;
 };
 
-type Command = {
-  name: string;
-  type?: CommandType;
-  description?: string;
-  options?: ReturnType<typeof Option>[];
-  aliases?: string[];
-  defaultPermission?: Permission;
-};
-
 type Choice = {
   name: string;
+  name_localizations?: LocalizationString;
   value: string | number;
 };
 
@@ -92,36 +91,38 @@ const Command = ({
   // deno-lint-ignore no-explicit-any
   const transformOption: any = (option: Option) => ({
     name: option.name,
-    description: option.description,
+    description: option.description && option.description in EN
+      ? EN[option.description as keyof typeof EN]
+      : option.description,
     autocomplete: option.autocomplete,
     type: option.type.valueOf(),
     choices: option.choices,
     required: !option.optional,
     min_value: option.min_value,
     max_value: option.max_value,
+    description_localizations: {
+      'es-ES': option.description && option.description in ES
+        ? ES[option.description as keyof typeof ES]
+        : undefined,
+    },
     options: option.options?.map((option) => transformOption(option)),
   });
 
   const commands = [{
     name,
     type,
-    description,
+    description: description && description in EN
+      ? EN[description as keyof typeof EN]
+      : description,
     dm_permission: false,
     default_member_permissions: defaultPermission,
+    description_localizations: {
+      'es-ES': description && description in ES
+        ? ES[description as keyof typeof ES]
+        : undefined,
+    },
     options: options?.map((option) => transformOption(option)),
   }];
-
-  options?.forEach((option, index) => {
-    option.aliases?.forEach((alias) => {
-      commands[0].options?.push({
-        ...commands[0].options[index],
-        name: typeof alias === 'object' ? alias.name : alias,
-        description: typeof alias === 'object'
-          ? alias.desc
-          : commands[0].options[index].description,
-      });
-    });
-  });
 
   aliases?.forEach((alias) =>
     commands.push({
@@ -179,24 +180,24 @@ export const commands = [
   // uses characters and media from all packs
   ...Command({
     name: 'search',
-    aliases: ['anime', 'manga', 'media'],
-    description: 'Search for a specific media',
+    aliases: ['anime', 'manga', 'media', 'series'],
+    description: '/search',
     options: [
       Option({
         name: 'title',
-        description: 'The title of the media',
+        description: '$media-title',
         autocomplete: true,
         type: Type.STRING,
       }),
       Option({
         name: 'debug',
-        description: 'Display the nerdy stuff',
+        description: '$debug',
         type: Type.BOOLEAN,
         optional: true,
       }),
       Option({
         name: 'characters',
-        description: 'View the characters from the media',
+        description: '$media-characters',
         type: Type.BOOLEAN,
         optional: true,
       }),
@@ -204,18 +205,18 @@ export const commands = [
   }),
   ...Command({
     name: 'character',
-    description: 'Search for a specific character',
+    description: '/character',
     aliases: ['char'],
     options: [
       Option({
         name: 'name',
-        description: 'The name of the character',
+        description: '$character-name',
         autocomplete: true,
         type: Type.STRING,
       }),
       Option({
         name: 'debug',
-        description: 'Display the nerdy stuff',
+        description: '$debug',
         type: Type.BOOLEAN,
         optional: true,
       }),
@@ -224,11 +225,11 @@ export const commands = [
   ...Command({
     name: 'found',
     aliases: ['owned'],
-    description: 'View all characters found in a specific media',
+    description: '/found',
     options: [
       Option({
         name: 'title',
-        description: 'The title of the media',
+        description: '$media-title',
         autocomplete: true,
         type: Type.STRING,
       }),
@@ -236,12 +237,12 @@ export const commands = [
   }),
   ...Command({
     name: 'like',
-    description: 'Like a character to be notified if someone finds them',
+    description: '/like',
     aliases: ['protect', 'wish'],
     options: [
       Option({
         name: 'name',
-        description: 'The name of the character',
+        description: '$character-name',
         autocomplete: true,
         type: Type.STRING,
       }),
@@ -249,11 +250,11 @@ export const commands = [
   }),
   ...Command({
     name: 'unlike',
-    description: 'Remove a character from your likes list',
+    description: '/unlike',
     options: [
       Option({
         name: 'name',
-        description: 'The name of the character',
+        description: '$character-name',
         autocomplete: true,
         type: Type.STRING,
       }),
@@ -261,12 +262,11 @@ export const commands = [
   }),
   ...Command({
     name: 'likeall',
-    description:
-      'Like a media to be notified if someone finds any character from it',
+    description: '/likeall',
     options: [
       Option({
         name: 'title',
-        description: 'The title of the media',
+        description: '$media-title',
         autocomplete: true,
         type: Type.STRING,
       }),
@@ -274,11 +274,11 @@ export const commands = [
   }),
   ...Command({
     name: 'unlikeall',
-    description: 'Remove a media from your likes list',
+    description: '/unlikeall',
     options: [
       Option({
         name: 'title',
-        description: 'The title of the media',
+        description: '$media-title',
         autocomplete: true,
         type: Type.STRING,
       }),
@@ -286,42 +286,48 @@ export const commands = [
   }),
   ...Command({
     name: 'likeslist',
-    description: 'List all characters liked',
+    description: '/likeslist',
     options: [
       Option({
         name: 'user',
-        description: 'The user of the likes list',
+        description: '$user-likes-list',
         type: Type.USER,
+        optional: true,
+      }),
+      Option({
+        name: 'filter',
+        description: '$user-likes-filter',
+        type: Type.BOOLEAN,
         optional: true,
       }),
     ],
   }),
   ...Command({
     name: 'give',
-    description: 'Give characters to another user',
+    description: '/give',
     aliases: ['gift'],
     options: [
       Option({
         name: 'user',
-        description: 'The user you want to trade with',
+        description: '$trade-user',
         type: Type.USER,
       }),
       Option({
         name: 'give',
-        description: 'The character you\'re giving away',
+        description: '$trade-give-character',
         autocomplete: true,
         type: Type.STRING,
       }),
       Option({
         name: 'give2',
-        description: 'Another character you\'re giving away',
+        description: '$trade-give-character',
         autocomplete: true,
         type: Type.STRING,
         optional: true,
       }),
       Option({
         name: 'give3',
-        description: 'A third character you\'re giving away',
+        description: '$trade-give-character',
         autocomplete: true,
         type: Type.STRING,
         optional: true,
@@ -330,50 +336,50 @@ export const commands = [
   }),
   ...Command({
     name: 'trade',
-    description: 'Trade characters with another user',
+    description: '/trade',
     aliases: ['offer'],
     options: [
       Option({
         name: 'user',
-        description: 'The user you want to trade with',
+        description: '$trade-user',
         type: Type.USER,
       }),
       Option({
         name: 'give',
-        description: 'The character you\'re giving away',
+        description: '$trade-give-character',
         autocomplete: true,
         type: Type.STRING,
       }),
       Option({
         name: 'take',
-        description: 'The character you want to take',
+        description: '$trade-take-character',
         autocomplete: true,
         type: Type.STRING,
       }),
       Option({
         name: 'give2',
-        description: 'Another character you\'re giving away',
+        description: '$trade-give-character',
         autocomplete: true,
         type: Type.STRING,
         optional: true,
       }),
       Option({
         name: 'give3',
-        description: 'A third character you\'re giving away',
+        description: '$trade-give-character',
         autocomplete: true,
         type: Type.STRING,
         optional: true,
       }),
       Option({
         name: 'take2',
-        description: 'Another character you want to take',
+        description: '$trade-take-character',
         autocomplete: true,
         type: Type.STRING,
         optional: true,
       }),
       Option({
         name: 'take3',
-        description: 'A third character you want to take',
+        description: '$trade-take-character',
         autocomplete: true,
         type: Type.STRING,
         optional: true,
@@ -382,68 +388,96 @@ export const commands = [
   }),
   ...Command({
     name: 'steal',
-    description: 'Steal a character from another user',
+    description: '/steal',
     options: [
       Option({
         name: 'name',
-        description: 'The name of the character',
+        description: '$character-name',
         autocomplete: true,
         type: Type.STRING,
-      }),
-      Option({
-        name: 'sacrifices',
-        description: 'The amount of stars to sacrifice for a boost',
-        type: Type.INTEGER,
-        optional: true,
       }),
     ],
   }),
   ...Command({
     name: 'help',
-    description: 'Need more information? We got you',
-    aliases: ['start', 'guide', 'tuto'],
+    description: '/help',
+    aliases: ['start', 'guide', 'wiki', 'tuto'],
     options: [
       Option({
         name: 'page',
-        description: 'Specify a page to display',
+        description: '$help-page',
         optional: true,
         type: Type.INTEGER,
         choices: [
           {
-            name: 'Gacha',
+            name: EN['$help-page-gacha'],
+            name_localizations: {
+              'es-ES': ES['$help-page-gacha'],
+            },
             value: 0,
           },
           {
-            name: 'Synthesis',
+            name: EN['$help-page-merging'],
+            name_localizations: {
+              'es-ES': ES['$help-page-merging'],
+            },
             value: 1,
           },
           {
-            name: 'Party',
+            name: EN['$help-page-party'],
+            name_localizations: {
+              'es-ES': ES['$help-page-party'],
+            },
             value: 2,
           },
           {
-            name: 'Stealing',
+            name: EN['$help-page-stealing'],
+            name_localizations: {
+              'es-ES': ES['$help-page-stealing'],
+            },
             value: 3,
           },
           {
-            name: 'Shop',
+            name: EN['$help-page-combat'],
+            name_localizations: {
+              'es-ES': ES['$help-page-combat'],
+            },
             value: 4,
           },
           {
-            name: 'Roadmap',
+            name: EN['$help-page-shop'],
+            name_localizations: {
+              'es-ES': ES['$help-page-shop'],
+            },
             value: 5,
           },
           {
-            name: 'Essential Commands',
+            name: EN['$help-page-roadmap'],
+            name_localizations: {
+              'es-ES': ES['$help-page-roadmap'],
+            },
             value: 6,
           },
           {
-            name: 'Other Commands',
+            name: EN['$help-page-essential-commands'],
+            name_localizations: {
+              'es-ES': ES['$help-page-essential-commands'],
+            },
             value: 7,
           },
           {
-            name: 'Admin Commands',
+            name: EN['$help-page-other-commands'],
+            name_localizations: {
+              'es-ES': ES['$help-page-other-commands'],
+            },
             value: 8,
+          },
+          {
+            name: EN['$help-page-admin-commands'],
+            name_localizations: {
+              'es-ES': ES['$help-page-admin-commands'],
+            },
+            value: 9,
           },
         ],
       }),
@@ -451,26 +485,26 @@ export const commands = [
   }),
   ...Command({
     name: 'now',
-    description: 'Check what you can do right now',
+    description: '/now',
     aliases: ['vote', 'tu'],
   }),
   ...Command({
     name: 'q',
-    description: 'Start a quiet gacha pull with no animations',
+    description: '/q',
   }),
   ...Command({
     name: 'gacha',
-    description: 'Start a gacha pull',
+    description: '/gacha',
     aliases: ['w'],
   }),
   ...Command({
     name: 'pull',
-    description: 'Pull a character with a guaranteed rating',
+    description: '/pull',
     aliases: ['guaranteed'],
     options: [
       Option({
         name: 'stars',
-        description: 'The star rating',
+        description: '$stars',
         type: Type.INTEGER,
         choices: spots.slice(2).toReversed(),
       }),
@@ -478,18 +512,18 @@ export const commands = [
   }),
   ...Command({
     name: 'image',
-    description: 'Change the image of a character',
+    description: '/image',
     aliases: ['custom'],
     options: [
       Option({
         name: 'character',
-        description: 'The name of the character',
+        description: '$character-name',
         autocomplete: true,
         type: Type.STRING,
       }),
       Option({
         name: 'new_image',
-        description: 'New image url',
+        description: '$new-image',
         type: Type.STRING,
         optional: true,
       }),
@@ -497,42 +531,72 @@ export const commands = [
   }),
   ...Command({
     name: 'nick',
-    description: 'Change the nickname of a character',
+    description: '/nick',
     options: [
       Option({
         name: 'character',
-        description: 'The name of the character',
+        description: '$character-name',
         type: Type.STRING,
         autocomplete: true,
       }),
       Option({
         name: 'new_nick',
-        description: 'New nickname',
+        description: '$new-nick',
         type: Type.STRING,
         optional: true,
       }),
     ],
   }),
   ...Command({
-    name: 'synthesize',
-    description: 'synthesize characters together to pull a new character',
-    aliases: ['merge'],
+    name: 'merge',
+    description: '/merge',
+    aliases: ['synthesize'],
     options: [
       Option({
         name: 'target',
-        description: 'The target star rating of this synthesis',
+        description: '$merge-star-target',
         choices: spots.slice(1).toReversed(),
         type: Type.INTEGER,
+      }),
+      // Option({
+      //   name: 'min',
+      //   description: '/merge min',
+      //   type: Type.SUB_COMMAND,
+      //   optional: true,
+      // }),
+      // Option({
+      //   name: 'max',
+      //   description: '/merge max',
+      //   type: Type.SUB_COMMAND,
+      //   optional: true,
+      // }),
+    ],
+  }),
+  ...Command({
+    name: 'automerge',
+    description: '/automerge',
+    options: [
+      Option({
+        name: 'min',
+        description: '/automerge min',
+        type: Type.SUB_COMMAND,
+        optional: true,
+      }),
+      Option({
+        name: 'max',
+        description: '/automerge max',
+        type: Type.SUB_COMMAND,
+        optional: true,
       }),
     ],
   }),
   ...Command({
     name: 'logs',
-    description: 'List user last few found characters',
+    description: '/logs',
     options: [
       Option({
         name: 'user',
-        description: 'The user of logs',
+        description: '$user-list',
         type: Type.USER,
         optional: true,
       }),
@@ -546,7 +610,7 @@ export const commands = [
     options: [
       Option({
         name: 'normal',
-        description: 'Use tokens to buy normal pulls',
+        description: '/buy normal',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
@@ -554,20 +618,20 @@ export const commands = [
             min_value: 1,
             max_value: 99,
             name: 'amount',
-            description: 'The amount of pulls you want to buy',
+            description: '$buy-normal-amount',
             type: Type.INTEGER,
           }),
         ],
       }),
       Option({
         name: 'guaranteed',
-        description: 'Use tokens to buy pulls with a guaranteed rating',
+        description: '/buy guaranteed',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'stars',
-            description: 'The star rating you want to buy',
+            description: '$buy-guaranteed-stars',
             type: Type.INTEGER,
             choices: spots.slice(2).toReversed(),
           }),
@@ -587,13 +651,13 @@ export const commands = [
     options: [
       Option({
         name: 'view',
-        description: 'View user current party',
+        description: '/party view',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'user',
-            description: 'The user of the party"',
+            description: '$user-party',
             type: Type.USER,
             optional: true,
           }),
@@ -601,19 +665,19 @@ export const commands = [
       }),
       Option({
         name: 'assign',
-        description: 'Assign a character to your party',
+        description: '/party assign',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'name',
-            description: 'The name of the character',
+            description: '$character-name',
             autocomplete: true,
             type: Type.STRING,
           }),
           Option({
             name: 'spot',
-            description: 'The spot where you want this character',
+            description: '$party-spot',
             type: Type.INTEGER,
             optional: true,
             choices: spots,
@@ -622,19 +686,19 @@ export const commands = [
       }),
       Option({
         name: 'swap',
-        description: 'Swap two characters spots',
+        description: '/party swap',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'a',
-            description: 'The first target of the swap',
+            description: '$party-swap-1',
             type: Type.INTEGER,
             choices: spots,
           }),
           Option({
             name: 'b',
-            description: 'The second target of the swap',
+            description: '$party-swap-2',
             type: Type.INTEGER,
             choices: spots,
           }),
@@ -642,13 +706,13 @@ export const commands = [
       }),
       Option({
         name: 'remove',
-        description: 'Remove a character from your party',
+        description: '/party remove',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'spot',
-            description: 'The spot the character occupies',
+            description: '$party-remove-spot',
             type: Type.INTEGER,
             choices: spots,
           }),
@@ -664,19 +728,19 @@ export const commands = [
     options: [
       Option({
         name: 'stars',
-        description: 'View all stars',
+        description: '/coll stars',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'rating',
-            description: 'The star rating',
+            description: '$stars',
             type: Type.INTEGER,
             choices: spots.toReversed(),
           }),
           Option({
             name: 'user',
-            description: 'The user of the collection',
+            description: '$user-list',
             type: Type.USER,
             optional: true,
           }),
@@ -684,19 +748,33 @@ export const commands = [
       }),
       Option({
         name: 'media',
-        description: 'View characters from a specific media',
+        description: '/coll media',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'title',
-            description: 'The title of the media',
+            description: '$media-title',
             type: Type.STRING,
             autocomplete: true,
           }),
           Option({
             name: 'user',
-            description: 'The user of the collection',
+            description: '$user-list',
+            type: Type.USER,
+            optional: true,
+          }),
+        ],
+      }),
+      Option({
+        name: 'sum',
+        description: '/coll sum',
+        type: Type.SUB_COMMAND,
+        optional: true,
+        options: [
+          Option({
+            name: 'user',
+            description: '$user-list',
             type: Type.USER,
             optional: true,
           }),
@@ -704,42 +782,85 @@ export const commands = [
       }),
     ],
   }),
-  // pack management commands
+  // pack viewing
   ...Command({
     name: 'packs',
-    description: 'pack management commands',
+    description: '/packs',
+  }),
+  // community packs management commands
+  ...Command({
+    name: 'community',
+    description: 'community packs management commands',
     defaultPermission: Permission.MANAGE_GUILD,
     options: [
       Option({
-        name: 'community',
-        description: 'View all instated community packs',
+        name: 'popular',
+        description: '/community popular',
         type: Type.SUB_COMMAND,
         optional: true,
       }),
       Option({
         name: 'install',
-        description: 'Install a community pack',
+        description: '/community install',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'id',
-            description: 'The id of the pack',
+            description: '$pack-id',
             type: Type.STRING,
           }),
         ],
       }),
       Option({
         name: 'uninstall',
-        description: 'Uninstall a pack',
+        description: '/community uninstall',
         type: Type.SUB_COMMAND,
         optional: true,
         options: [
           Option({
             name: 'id',
-            description: 'The id of the pack',
+            description: '$pack-id',
             autocomplete: true,
             type: Type.STRING,
+          }),
+        ],
+      }),
+    ],
+  }),
+  ...Command({
+    name: 'stats',
+    description: '/stats',
+    options: [
+      Option({
+        name: 'name',
+        description: '$character-name',
+        autocomplete: true,
+        type: Type.STRING,
+      }),
+      Option({
+        name: 'distribution',
+        description: '$distribution',
+        type: Type.STRING,
+        optional: true,
+      }),
+    ],
+  }),
+  // experimental ephemeral temporary
+  ...Command({
+    name: 'experimental',
+    description: 'experimental ephemeral temporary commands',
+    options: [
+      Option({
+        name: 'battle',
+        description: '/experimental battle',
+        type: Type.SUB_COMMAND,
+        optional: true,
+        options: [
+          Option({
+            name: 'versus',
+            description: '$versus',
+            type: Type.USER,
           }),
         ],
       }),

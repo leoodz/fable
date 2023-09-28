@@ -8,9 +8,11 @@ import user from './user.ts';
 
 import * as discord from './discord.ts';
 
-import { gql, request } from './graphql.ts';
+import config from './config.ts';
 
-import config, { faunaUrl } from './config.ts';
+import db from '../db/mod.ts';
+
+import type * as Schema from '../db/schema.ts';
 
 import {
   Character,
@@ -19,7 +21,6 @@ import {
   Media,
   MediaFormat,
   MediaRelation,
-  Schema,
 } from './types.ts';
 
 import { NonFetalError } from './errors.ts';
@@ -38,22 +39,36 @@ export const relationFilter = [
 const musicUrlRegex = /youtube|spotify/;
 
 const externalUrlRegex =
-  /^(https:\/\/)?(www\.)?(youtube\.com|twitch\.tv|crunchyroll\.com|tapas\.io|webtoon\.com|amazon\.com)[\S]*$/;
+  /^(https:\/\/)?(www\.)?(youtube\.com|twitch\.tv|crunchyroll\.com|tapas\.io|webtoons\.com|amazon\.com)[\S]*$/;
+
+const findCharacter = async (
+  guildId: string,
+  characterId: string,
+) => {
+  const guild = await db.getGuild(guildId);
+  const instance = await db.getInstance(guild);
+
+  const results = await db.findCharacters(instance, [characterId]);
+
+  return results[0];
+};
 
 function media(
-  { token, id, search, debug, guildId, channelId }: {
+  { token, id, search, debug, guildId }: {
     token: string;
     id?: string;
     search?: string;
     debug?: boolean;
     guildId: string;
-    channelId: string;
   },
 ): discord.Message {
   packs
     .media(id ? { ids: [id], guildId } : { search, guildId })
     .then((results: (Media | DisaggregatedMedia)[]) => {
-      if (!results.length) {
+      if (
+        !results.length ||
+        packs.isDisabled(`${results[0].packId}:${results[0].id}`, guildId)
+      ) {
         throw new Error('404');
       }
 
@@ -65,11 +80,11 @@ function media(
     })
     .then(async (media) => {
       if (debug) {
-        return await mediaDebugMessage(media, channelId)
+        return await mediaDebugMessage(media)
           .patch(token);
       }
 
-      return await mediaMessage(media, channelId)
+      return await mediaMessage(media)
         .patch(token);
     })
     .catch(async (err) => {
@@ -101,7 +116,7 @@ function media(
   return loading;
 }
 
-function mediaMessage(media: Media, channelId: string): discord.Message {
+function mediaMessage(media: Media): discord.Message {
   const titles = packs.aliasToArray(media.title);
 
   if (!titles?.length) {
@@ -112,14 +127,14 @@ function mediaMessage(media: Media, channelId: string): discord.Message {
   const musicGroup: discord.Component[] = [];
 
   const message = new discord.Message()
-    .addEmbed(mediaEmbed(media, channelId, titles));
+    .addEmbed(mediaEmbed(media, titles));
 
   // character embeds
   // sort characters by popularity
   media.characters?.edges
     ?.slice(0, 2)
     .forEach((edge) => {
-      const embed = characterEmbed(edge.node, channelId, {
+      const embed = characterEmbed(edge.node, {
         mode: 'thumbnail',
         rating: false,
       });
@@ -198,22 +213,17 @@ function mediaMessage(media: Media, channelId: string): discord.Message {
 
 function mediaEmbed(
   media: Media,
-  channelId: string,
   titles: string[],
 ): discord.Embed {
   return new discord.Embed()
     .setTitle(utils.wrap(titles[0]))
     .setAuthor({ name: packs.formatToString(media.format) })
     .setDescription(utils.decodeDescription(media.description))
-    .setImage({
-      url: media.images?.[0]?.url,
-      blur: media.images?.[0]?.nsfw && !packs.cachedChannels[channelId]?.nsfw,
-    });
+    .setImage({ url: media.images?.[0]?.url });
 }
 
 function mediaDebugMessage(
   media: Media | DisaggregatedMedia,
-  channelId: string,
 ): discord.Message | discord.Message {
   const titles = packs.aliasToArray(media.title);
 
@@ -224,10 +234,7 @@ function mediaDebugMessage(
   const embed = new discord.Embed()
     .setTitle(titles.shift())
     .setDescription(titles.join('\n'))
-    .setThumbnail({
-      url: media.images?.[0]?.url,
-      blur: media.images?.[0]?.nsfw && !packs.cachedChannels[channelId]?.nsfw,
-    })
+    .setThumbnail({ url: media.images?.[0]?.url })
     .addField({ name: 'Id', value: `${media.packId}:${media.id}` })
     .addField({
       name: 'Type',
@@ -249,9 +256,8 @@ function mediaDebugMessage(
 }
 
 function character(
-  { token, guildId, channelId, search, id, debug }: {
+  { token, guildId, search, id, debug }: {
     token: string;
-    channelId: string;
     guildId: string;
     id?: string;
     search?: string;
@@ -260,8 +266,12 @@ function character(
 ): discord.Message {
   packs
     .characters(id ? { ids: [id], guildId } : { search, guildId })
-    .then((results: (Character | DisaggregatedCharacter)[]) => {
+    .then((results) => {
       if (!results.length) {
+        throw new Error('404');
+      }
+
+      if (packs.isDisabled(`${results[0].packId}:${results[0].id}`, guildId)) {
         throw new Error('404');
       }
 
@@ -272,21 +282,33 @@ function character(
           character: results[0],
           end: 4,
         }),
-        // find if the character is owned
-        user.findCharacter({
-          guildId,
-          characterId: `${results[0].packId}:${results[0].id}`,
-        }),
+        findCharacter(guildId, `${results[0].packId}:${results[0].id}`),
       ]);
     })
     .then(async ([character, existing]) => {
+      const media = character.media?.edges?.[0]?.node;
+
+      if (
+        (
+          existing?.[0] &&
+          packs.isDisabled(existing[0].mediaId, guildId)
+        ) ||
+        (
+          media &&
+          packs.isDisabled(`${media.packId}:${media.id}`, guildId)
+        )
+      ) {
+        throw new Error('404');
+      }
+
       if (debug) {
-        return await characterDebugMessage(character, channelId)
+        return await characterDebugMessage(character)
           .patch(token);
       }
 
-      const message = characterMessage(character, channelId, {
-        existing,
+      const message = characterMessage(character, {
+        existing: existing?.[0],
+        userId: existing?.[1]?.id,
       });
 
       message.insertComponents([
@@ -328,10 +350,9 @@ function character(
 
 function characterMessage(
   character: Character | DisaggregatedCharacter,
-  channelId: string,
-  options?: Parameters<typeof characterEmbed>[2] & {
+  options?: Parameters<typeof characterEmbed>[1] & {
     externalLinks?: boolean;
-    relations?: boolean | number | DisaggregatedMedia[];
+    relations?: boolean | DisaggregatedMedia[];
   },
 ): discord.Message {
   options = {
@@ -343,7 +364,7 @@ function characterMessage(
   };
 
   const message = new discord.Message()
-    .addEmbed(characterEmbed(character, channelId, options));
+    .addEmbed(characterEmbed(character, options));
 
   const group: discord.Component[] = [];
 
@@ -364,17 +385,12 @@ function characterMessage(
   // relation components
   // sort media by popularity
   if (Array.isArray(options.relations)) {
-    relations = options.relations.slice(0, 4);
+    relations = options.relations.slice(0, 1);
   } else if (
     options.relations && character.media && 'edges' in character.media
   ) {
-    let edges = character.media.edges;
-
-    if (typeof options.relations === 'number') {
-      edges = edges.slice(0, Math.min(Math.max(options.relations, 1), 4));
-    } else {
-      edges = edges.slice(0, 4);
-    }
+    const edges = character.media.edges
+      .slice(0, 1);
 
     relations = edges.map(({ node }) => node);
   }
@@ -394,8 +410,8 @@ function characterMessage(
 
 function characterEmbed(
   character: Character | DisaggregatedCharacter,
-  channelId: string,
   options?: {
+    userId?: string;
     existing?: Partial<Schema.Character>;
     rating?: Rating | boolean;
     media?: {
@@ -432,29 +448,25 @@ function characterEmbed(
   const aliasWrapped = utils.wrap(alias, wrapWidth);
 
   if (options.mode === 'full') {
-    embed.setImage({
-      url: image?.url,
-      blur: image?.nsfw &&
-        !packs.cachedChannels[channelId]?.nsfw,
-    });
+    embed.setImage({ url: image?.url });
   } else {
-    embed.setThumbnail({
-      url: image?.url,
-      blur: image?.nsfw &&
-        !packs.cachedChannels[channelId]?.nsfw,
-    });
+    embed.setThumbnail({ url: image?.url });
   }
 
   if (options?.existing?.rating) {
     // FIXME #63 Media Conflict
 
-    const rating = new Rating({ stars: options.existing.rating });
+    if (options?.rating) {
+      const rating = new Rating({ stars: options.existing.rating });
 
-    embed.setDescription(
-      options.existing.user?.id
-        ? `<@${options.existing.user.id}>\n\n${rating.emotes}`
-        : rating.emotes,
-    );
+      embed.setDescription(
+        options.userId
+          ? `<@${options.userId}>\n\n${rating.emotes}`
+          : rating.emotes,
+      );
+    } else if (options.userId) {
+      embed.setDescription(`<@${options.userId}>`);
+    }
   } else if (options?.rating) {
     if (typeof options.rating === 'boolean' && options.rating) {
       options.rating = Rating.fromCharacter(character as Character);
@@ -515,10 +527,7 @@ function characterEmbed(
   return embed;
 }
 
-function characterDebugMessage(
-  character: Character,
-  channelId: string,
-): discord.Message {
+function characterDebugMessage(character: Character): discord.Message {
   const media = character.media?.edges?.[0];
 
   const role = media?.role;
@@ -534,11 +543,7 @@ function characterDebugMessage(
   const embed = new discord.Embed()
     .setTitle(titles.splice(0, 1)[0])
     .setDescription(titles.join('\n'))
-    .setThumbnail({
-      url: character.images?.[0]?.url,
-      blur: character.images?.[0]?.nsfw &&
-        !packs.cachedChannels[channelId]?.nsfw,
-    })
+    .setThumbnail({ url: character.images?.[0]?.url })
     .addField({ name: 'Id', value: `${character.packId}:${character.id}` })
     .addField({
       name: 'Rating',
@@ -578,17 +583,17 @@ function characterDebugMessage(
 }
 
 async function mediaCharacters(
-  { search, id, guildId, channelId, index }: {
+  { search, id, userId, guildId, index }: {
     search?: string;
     id?: string;
+    userId: string;
     guildId: string;
-    channelId: string;
     index: number;
   },
 ): Promise<discord.Message> {
-  const list = await packs.all({ guildId });
+  const locale = user.cachedUsers[userId]?.locale;
 
-  const { character: node, role, media, next, total } = await packs
+  const { character: node, media, next, total } = await packs
     .mediaCharacters({
       id,
       search,
@@ -596,7 +601,7 @@ async function mediaCharacters(
       index,
     });
 
-  if (!media) {
+  if (!media || packs.isDisabled(`${media.packId}:${media.id}`, guildId)) {
     throw new Error('404');
   }
 
@@ -610,7 +615,7 @@ async function mediaCharacters(
     );
   }
 
-  if (packs.isDisabled(`${node.packId}:${node.id}`, list)) {
+  if (packs.isDisabled(`${node.packId}:${node.id}`, guildId)) {
     throw new NonFetalError('This character was removed or disabled');
   }
 
@@ -622,19 +627,17 @@ async function mediaCharacters(
       end: 1,
     }),
     // find if the character is owned
-    user.findCharacter({
-      guildId,
-      characterId: `${node.packId}:${node.id}`,
-    }),
+    findCharacter(guildId, `${node.packId}:${node.id}`),
   ]);
 
-  const message = characterMessage(character, channelId, {
-    existing,
-    rating: new Rating({
-      role,
-      popularity: character.popularity ?? media.popularity,
-    }),
+  const message = characterMessage(character, {
+    rating: false,
     relations: false,
+    description: true,
+    externalLinks: true,
+    footer: true,
+    existing: existing?.[0],
+    userId: existing?.[1]?.id,
   }).addComponents([
     new discord.Component()
       .setId('media', `${media.packId}:${media.id}`)
@@ -654,6 +657,7 @@ async function mediaCharacters(
     message,
     index,
     next,
+    locale,
   });
 }
 
@@ -663,15 +667,19 @@ function mediaFound(
     index,
     search,
     id,
+    userId,
     guildId,
   }: {
     token: string;
     index: number;
     guildId: string;
+    userId: string;
     search?: string;
     id?: string;
   },
 ): discord.Message {
+  const locale = user.cachedUsers[userId]?.locale;
+
   packs
     .media(id ? { ids: [id], guildId } : { search, guildId })
     .then(async (results: (Media | DisaggregatedMedia)[]) => {
@@ -679,7 +687,10 @@ function mediaFound(
 
       const message = new discord.Message();
 
-      if (!results.length) {
+      if (
+        !results.length ||
+        packs.isDisabled(`${results[0].packId}:${results[0].id}`, guildId)
+      ) {
         throw new Error('404');
       }
 
@@ -696,115 +707,83 @@ function mediaFound(
         ).map(({ node }) => node) ?? []),
       ];
 
-      const query = gql`
-        query ($guildId: String!, $mediaIds: [String!]) {
-          findMedia(guildId: $guildId, mediaIds: $mediaIds) {
-            id
-            mediaId
-            rating
-            user {
-              id
-            }
-          }
-        }
-      `;
+      const guild = await db.getGuild(guildId);
+      const instance = await db.getInstance(guild);
 
-      const response = (await request<{
-        findMedia: Schema.Inventory['characters'];
-      }>({
-        url: faunaUrl,
-        query,
-        headers: {
-          'authorization': `Bearer ${config.faunaSecret}`,
-        },
-        variables: {
-          guildId,
-          mediaIds: media.map(({ packId, id }) => `${packId}:${id}`),
-        },
-      })).findMedia;
-
-      if (!response?.length) {
-        throw new NonFetalError(
-          `No one has found any ${
-            packs.aliasToArray(parent.title)[0]
-          } characters`,
-        );
-      }
+      const characters = await db.findMediaCharacters(
+        instance,
+        media.map(({ packId, id }) => `${packId}:${id}`),
+      );
 
       const chunks = utils.chunks(
-        response.sort((a, b) => {
-          if (a.mediaId < b.mediaId) {
+        characters.sort((a, b) => {
+          if (a[0].mediaId < b[0].mediaId) {
             return -1;
           }
 
-          if (a.mediaId > b.mediaId) {
+          if (a[0].mediaId > b[0].mediaId) {
             return 1;
           }
 
-          return b.rating - a.rating;
+          return b[0].rating - a[0].rating;
         }),
         5,
       );
 
-      const characters = await packs.characters({
-        ids: chunks[index].map(({ id }) => id),
+      const _characters = await packs.characters({
+        ids: chunks[index]?.map(([{ id }]) => id),
         guildId,
       });
 
-      const fields: Record<string, {
-        title: string;
-        names: string[];
-      }> = {};
-
-      for (let i = 0; i < characters.length; i++) {
-        const char = characters[i];
+      for (let i = 0; i < _characters.length; i++) {
+        const char = _characters[i];
 
         // deno-lint-ignore no-non-null-assertion
-        const existing = chunks[index].find(({ id }) =>
+        const existing = chunks[index].find(([{ id }]) =>
           id === `${char.packId}:${char.id}`
         )!;
 
-        if (!fields[existing.mediaId]) {
-          const title = utils.wrap(
-            packs.aliasToArray(
-              // deno-lint-ignore no-non-null-assertion
-              media.find(({ packId, id }) =>
-                `${packId}:${id}` === existing.mediaId
-              )!.title,
-            )[0],
-          );
+        const _media = media.find(({ packId, id }) =>
+          `${packId}:${id}` === existing[0].mediaId
+        );
 
-          fields[existing.mediaId] = {
-            title,
-            names: [],
-          };
+        const mediaTitle = _media?.title
+          ? utils.wrap(
+            packs.aliasToArray(_media.title)[0],
+          )
+          : undefined;
+
+        if (
+          packs.isDisabled(`${char.packId}:${char.id}`, guildId) ||
+          (
+            _media &&
+            packs.isDisabled(`${_media.packId}:${_media.id}`, guildId)
+          )
+        ) {
+          continue;
         }
 
-        const field = fields[existing.mediaId];
+        const name = `${
+          existing[0].rating
+        }${discord.emotes.smolStar} ${`<@${existing[1]?.id}>`} ${
+          utils.wrap(packs.aliasToArray(char.name)[0])
+        }`;
 
-        const name =
-          `${existing.rating}${discord.emotes.smolStar} ${`<@${existing.user.id}>`} ${
-            utils.wrap(packs.aliasToArray(char.name)[0])
-          }`;
-
-        field.names.push(name);
+        embed.addField({
+          inline: false,
+          name: mediaTitle ? mediaTitle : name,
+          value: mediaTitle ? name : undefined,
+        });
       }
 
-      Object.values(fields).forEach(({ title, names }) =>
-        embed.addField({
-          inline: false,
-          name: title,
-          value: names.join('\n'),
-        })
-      );
+      if (embed.getFieldsCount() <= 0) {
+        message.addEmbed(embed.setDescription(
+          `No one has found any ${
+            packs.aliasToArray(parent.title)[0]
+          } characters`,
+        ));
 
-      if (characters.length !== chunks[index].length) {
-        embed.addField({
-          inline: false,
-          name: `_${
-            chunks[index].length - characters.length
-          } disabled characters_`,
-        });
+        return message.patch(token);
       }
 
       return discord.Message.page({
@@ -814,6 +793,7 @@ function mediaFound(
         total: chunks.length,
         message: message.addEmbed(embed),
         next: index + 1 < chunks.length,
+        locale,
       }).patch(token);
     })
     .catch(async (err) => {
@@ -824,15 +804,6 @@ function mediaFound(
               'Found _nothing_ matching that query!',
             ),
           ).patch(token);
-      }
-
-      if (err instanceof NonFetalError) {
-        return await new discord.Message()
-          .addEmbed(
-            new discord.Embed()
-              .setDescription(err.message),
-          )
-          .patch(token);
       }
 
       if (!config.sentry) {

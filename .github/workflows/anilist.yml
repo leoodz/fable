@@ -13,13 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
+          submodules: recursive
           token: ${{ secrets.PAT }}
           repository: ker0olos/fable
       
       - uses: denoland/setup-deno@v1
         with:
           deno-version: v1.x
-      - run: deno run -A packs/anilist/pool.ts
+      - run: deno run -A --unstable packs/anilist/pool.ts
     
       - uses: actions/upload-artifact@v3
         with:

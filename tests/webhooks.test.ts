@@ -1,20 +1,120 @@
 // deno-lint-ignore-file no-explicit-any
 
-import { assertEquals, assertRejects } from '$std/testing/asserts.ts';
+import { assertEquals } from '$std/assert/mod.ts';
 
 import { assertSpyCall, assertSpyCalls, spy, stub } from '$std/testing/mock.ts';
 
 import utils from '../src/utils.ts';
-import config from '../src/config.ts';
+
 import user from '../src/user.ts';
+
+import config from '../src/config.ts';
 
 import webhooks from '../src/webhooks.ts';
 
+import db from '../db/mod.ts';
+
 Deno.test('topgg', async (test) => {
   await test.step('normal', async () => {
+    const addTokensStub = stub(
+      db,
+      'addTokens',
+      () => undefined as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      () => undefined as any,
+    );
+
+    config.topggSecret = 'x'.repeat(32);
+
+    try {
+      const request = new Request('http://localhost:8000', {
+        method: 'POST',
+        body: JSON.stringify({
+          isWeekend: false,
+          user: 'user_id',
+          type: 'upvote',
+        }),
+        headers: { 'Authorization': config.topggSecret },
+      });
+
+      const response = await webhooks.topgg(request);
+
+      assertEquals(
+        getUserStub.calls[0].args[0],
+        'user_id',
+      );
+
+      assertEquals(
+        addTokensStub.calls[0].args[1],
+        1,
+      );
+
+      assertEquals(response.status, 200);
+      assertEquals(response.statusText, 'OK');
+    } finally {
+      delete config.topggSecret;
+
+      addTokensStub.restore();
+      getUserStub.restore();
+    }
+  });
+
+  await test.step('weekend', async () => {
+    const addTokensStub = stub(
+      db,
+      'addTokens',
+      () => undefined as any,
+    );
+
+    const getUserStub = stub(
+      db,
+      'getUser',
+      () => undefined as any,
+    );
+
+    config.topggSecret = 'x'.repeat(32);
+
+    try {
+      const request = new Request('http://localhost:8000', {
+        method: 'POST',
+        body: JSON.stringify({
+          isWeekend: true,
+          user: 'user_id',
+          type: 'upvote',
+        }),
+        headers: { 'Authorization': config.topggSecret },
+      });
+
+      const response = await webhooks.topgg(request);
+
+      assertEquals(
+        getUserStub.calls[0].args[0],
+        'user_id',
+      );
+
+      assertEquals(
+        addTokensStub.calls[0].args[1],
+        2,
+      );
+
+      assertEquals(response.status, 200);
+      assertEquals(response.statusText, 'OK');
+    } finally {
+      delete config.topggSecret;
+
+      addTokensStub.restore();
+      getUserStub.restore();
+    }
+  });
+
+  await test.step('patch /now', async () => {
     const fetchStub = stub(
-      globalThis,
-      'fetch',
+      utils,
+      'fetchWithRetry',
       () => ({
         ok: true,
         text: (() =>
@@ -28,54 +128,16 @@ Deno.test('topgg', async (test) => {
       } as any),
     );
 
-    config.topggSecret = 'x'.repeat(32);
+    const addTokensStub = stub(
+      db,
+      'addTokens',
+      () => undefined as any,
+    );
 
-    try {
-      const request = new Request('http://localhost:8000', {
-        method: 'POST',
-        body: JSON.stringify({
-          isWeekend: false,
-          user: 'user_id',
-          type: 'upvote',
-        }),
-        headers: {
-          'Authorization': config.topggSecret,
-        },
-      });
-
-      const response = await webhooks.topgg(request);
-
-      assertSpyCalls(fetchStub, 1);
-
-      assertEquals(
-        fetchStub.calls[0].args[0],
-        'https://graphql.us.fauna.com/graphql',
-      );
-
-      assertEquals(response.status, 200);
-      assertEquals(response.statusText, 'OK');
-    } finally {
-      delete config.topggSecret;
-
-      fetchStub.restore();
-    }
-  });
-
-  await test.step('patch /now', async () => {
-    const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => ({
-        ok: true,
-        text: (() =>
-          Promise.resolve(JSON.stringify({
-            data: {
-              addTokensToUser: {
-                ok: true,
-              },
-            },
-          }))),
-      } as any),
+    const getUserStub = stub(
+      db,
+      'getUser',
+      () => undefined as any,
     );
 
     const patchStub = spy(() => true);
@@ -110,18 +172,19 @@ Deno.test('topgg', async (test) => {
           user: 'user_id',
           type: 'upvote',
         }),
-        headers: {
-          'Authorization': config.topggSecret,
-        },
+        headers: { 'Authorization': config.topggSecret },
       });
 
       await webhooks.topgg(request);
 
-      assertSpyCalls(fetchStub, 2);
+      assertEquals(
+        getUserStub.calls[0].args[0],
+        'user_id',
+      );
 
       assertEquals(
-        fetchStub.calls[0].args[0],
-        'https://graphql.us.fauna.com/graphql',
+        addTokensStub.calls[0].args[1],
+        1,
       );
 
       assertSpyCall(userStub, 0, {
@@ -141,15 +204,15 @@ Deno.test('topgg', async (test) => {
       });
 
       assertEquals(
-        fetchStub.calls[1].args[0],
+        fetchStub.calls[0].args[0],
         `https://discord.com/api/v10/webhooks/app_id/${token}`,
       );
 
-      assertEquals(fetchStub.calls[1].args[1]?.method, 'POST');
+      assertEquals(fetchStub.calls[0].args[1]?.method, 'POST');
 
       assertEquals(
         JSON.parse(
-          (fetchStub.calls[1].args[1]?.body as FormData)?.get(
+          (fetchStub.calls[0].args[1]?.body as FormData)?.get(
             'payload_json',
           ) as any,
         ),
@@ -174,25 +237,17 @@ Deno.test('topgg', async (test) => {
       delete config.topggSecret;
 
       fetchStub.restore();
+      addTokensStub.restore();
+      getUserStub.restore();
       userStub.restore();
     }
   });
 
   await test.step('bad request', async () => {
     const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => ({
-        ok: true,
-        text: (() =>
-          Promise.resolve(JSON.stringify({
-            data: {
-              addVoteToUser: {
-                ok: true,
-              },
-            },
-          }))),
-      } as any),
+      utils,
+      'fetchWithRetry',
+      () => undefined as any,
     );
 
     config.topggSecret = 'x'.repeat(32);
@@ -222,19 +277,9 @@ Deno.test('topgg', async (test) => {
 
   await test.step('non-string topgg secret', async () => {
     const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => ({
-        ok: true,
-        text: (() =>
-          Promise.resolve(JSON.stringify({
-            data: {
-              addVoteToUser: {
-                ok: true,
-              },
-            },
-          }))),
-      } as any),
+      utils,
+      'fetchWithRetry',
+      () => undefined as any,
     );
 
     config.topggSecret = 1234 as unknown as string;
@@ -267,19 +312,9 @@ Deno.test('topgg', async (test) => {
 
   await test.step('short topgg secret', async () => {
     const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => ({
-        ok: true,
-        text: (() =>
-          Promise.resolve(JSON.stringify({
-            data: {
-              addVoteToUser: {
-                ok: true,
-              },
-            },
-          }))),
-      } as any),
+      utils,
+      'fetchWithRetry',
+      () => undefined as any,
     );
 
     config.topggSecret = 'x'.repeat(28);
@@ -312,19 +347,9 @@ Deno.test('topgg', async (test) => {
 
   await test.step('fake auth token', async () => {
     const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => ({
-        ok: true,
-        text: (() =>
-          Promise.resolve(JSON.stringify({
-            data: {
-              addVoteToUser: {
-                ok: true,
-              },
-            },
-          }))),
-      } as any),
+      utils,
+      'fetchWithRetry',
+      () => undefined as any,
     );
 
     config.topggSecret = 'x'.repeat(32);
@@ -348,59 +373,6 @@ Deno.test('topgg', async (test) => {
 
       assertEquals(response.status, 403);
       assertEquals(response.statusText, 'Forbidden');
-    } finally {
-      delete config.topggSecret;
-
-      fetchStub.restore();
-    }
-  });
-
-  await test.step('internal', async () => {
-    const body = JSON.stringify({
-      isWeekend: false,
-      user: 'user_id',
-      type: 'upvote',
-    });
-
-    const fetchStub = stub(
-      globalThis,
-      'fetch',
-      () => ({
-        ok: true,
-        text: (() =>
-          Promise.resolve(JSON.stringify({
-            data: {
-              addTokensToUser: {
-                ok: false,
-              },
-            },
-          }))),
-      } as any),
-    );
-
-    config.topggSecret = 'x'.repeat(32);
-
-    try {
-      const request = new Request('http://localhost:8000', {
-        body,
-        method: 'POST',
-        headers: {
-          'Authorization': config.topggSecret,
-        },
-      });
-
-      await assertRejects(
-        async () => await webhooks.topgg(request),
-        Error,
-        `failed to reward user`,
-      );
-
-      assertSpyCalls(fetchStub, 1);
-
-      assertEquals(
-        fetchStub.calls[0].args[0],
-        'https://graphql.us.fauna.com/graphql',
-      );
     } finally {
       delete config.topggSecret;
 

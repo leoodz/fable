@@ -1,24 +1,10 @@
 import utils from './utils.ts';
 
-export class GraphQLError extends Error {
-  url: string;
-  query: string;
-  // deno-lint-ignore no-explicit-any
-  variables: any;
-
-  constructor(
-    url: string,
-    query: string,
-    // deno-lint-ignore no-explicit-any
-    variables: any,
-    message: string,
-  ) {
+export class KvError extends Error {
+  constructor(message: string) {
     super(message);
 
-    this.name = 'GraphQLError';
-    this.url = url;
-    this.query = query;
-    this.variables = variables;
+    this.name = 'KvError';
   }
 }
 
@@ -53,10 +39,9 @@ export class NoPullsError extends Error {
 
 export class PoolError extends Error {
   constructor() {
-    const message =
-      'failed to pull a character due to the pool not containing any characters that match the randomly chosen variables';
-
-    super(message);
+    super(
+      'failed to pull a character due to the pool not containing any characters that match the randomly chosen variables',
+    );
 
     this.name = 'PoolError';
   }

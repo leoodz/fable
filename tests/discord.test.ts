@@ -1,11 +1,13 @@
 // deno-lint-ignore-file no-non-null-assertion no-explicit-any
 
-import { assert, assertEquals } from '$std/testing/asserts.ts';
+import { assert, assertEquals } from '$std/assert/mod.ts';
 
 import { assertSpyCall, assertSpyCalls, stub } from '$std/testing/mock.ts';
 
+import utils, { ImageSize } from '../src/utils.ts';
+
 import * as discord from '../src/discord.ts';
-import { ImageSize } from '../src/utils.ts';
+
 import config from '../src/config.ts';
 
 Deno.test('interactions', async (test) => {
@@ -693,8 +695,8 @@ Deno.test('static messages', async (test) => {
 
 Deno.test('patch messages', async () => {
   const fetchStub = stub(
-    globalThis,
-    'fetch',
+    utils,
+    'fetchWithRetry',
     () => true as any,
   );
 
@@ -733,8 +735,8 @@ Deno.test('patch messages', async () => {
 
 Deno.test('followup messages', async () => {
   const fetchStub = stub(
-    globalThis,
-    'fetch',
+    utils,
+    'fetchWithRetry',
     () => true as any,
   );
 
@@ -994,103 +996,6 @@ Deno.test('page messages', async (test) => {
   });
 });
 
-Deno.test('anchor messages', async (test) => {
-  await test.step('normal', () => {
-    const message = discord.Message.anchor({
-      id: 'id',
-      target: 'target',
-      anchor: 'anchor',
-      type: 'type',
-      message: new discord.Message()
-        .addEmbed(new discord.Embed().setTitle('title')),
-    });
-
-    assertEquals(message.json(), {
-      type: 4,
-      data: {
-        embeds: [{
-          type: 'rich',
-          title: 'title',
-        }],
-        attachments: [],
-        components: [{
-          type: 1,
-          components: [{
-            custom_id: 'type=target=id=anchor=prev',
-            label: 'Prev',
-            style: 2,
-            type: 2,
-          }, {
-            custom_id: 'type=target=id=anchor=next',
-            label: 'Next',
-            style: 2,
-            type: 2,
-          }],
-        }],
-      },
-    });
-  });
-});
-
-// Deno.test('get avatar', async (test) => {
-//   await test.step('member', () => {
-//     const user: discord.User = {
-//       id: 'user_id',
-//       username: 'test_username',
-//       avatar: 'avatar_hash',
-//     };
-
-//     const member: discord.Member = {
-//       user,
-//       nick: 'test_nickname',
-//       avatar: 'guild_avatar_hash',
-//     };
-
-//     assertEquals(
-//       discord.getAvatar(member, user, 'guild_id'),
-//       'https://cdn.discordapp.com/guilds/guild_id/users/user_id/avatars/guild_avatar_hash.png',
-//     );
-//   });
-
-//   await test.step('user', () => {
-//     const user: discord.User = {
-//       id: 'user_id',
-//       username: 'test_username',
-//       avatar: 'avatar_hash',
-//     };
-
-//     const member: discord.Member = {
-//       user,
-//       nick: undefined,
-//       avatar: undefined,
-//     };
-
-//     assertEquals(
-//       discord.getAvatar(member, user, 'guild_id'),
-//       'https://cdn.discordapp.com/avatars/user_id/avatar_hash.png',
-//     );
-//   });
-
-//   await test.step('default', () => {
-//     const user: discord.User = {
-//       id: 'user_id',
-//       username: 'test_username',
-//       avatar: undefined,
-//     };
-
-//     const member: discord.Member = {
-//       user,
-//       nick: undefined,
-//       avatar: undefined,
-//     };
-
-//     assertEquals(
-//       discord.getAvatar(member, user, 'guild_id'),
-//       'https://cdn.discordapp.com/embed/avatars/2.png',
-//     );
-//   });
-// });
-
 Deno.test('emotes', async (test) => {
   for (const [name, tag] of Object.entries(discord.emotes)) {
     await test.step(name, async () => {
@@ -1116,7 +1021,6 @@ Deno.test('images', async (test) => {
     const embed = new discord.Embed();
 
     embed.setImage({
-      blur: false,
       default: false,
       proxy: false,
       size: ImageSize.Medium,
@@ -1133,7 +1037,6 @@ Deno.test('images', async (test) => {
     const embed = new discord.Embed();
 
     embed.setImage({
-      blur: true,
       default: true,
       proxy: true,
       size: ImageSize.Medium,
@@ -1153,7 +1056,6 @@ Deno.test('images', async (test) => {
       const embed = new discord.Embed();
 
       embed.setImage({
-        blur: true,
         default: true,
         proxy: true,
         size: ImageSize.Medium,
@@ -1173,7 +1075,6 @@ Deno.test('images', async (test) => {
     const embed = new discord.Embed();
 
     embed.setImage({
-      blur: false,
       default: false,
       proxy: true,
       size: ImageSize.Large,
@@ -1190,7 +1091,6 @@ Deno.test('images', async (test) => {
     const embed = new discord.Embed();
 
     embed.setImage({
-      blur: false,
       default: true,
       proxy: false,
       size: ImageSize.Large,
@@ -1202,40 +1102,6 @@ Deno.test('images', async (test) => {
       'undefined/external/url',
     );
   });
-
-  await test.step('blur', () => {
-    const embed = new discord.Embed();
-
-    embed.setImage({
-      blur: true,
-      default: true,
-      proxy: true,
-      size: ImageSize.Large,
-      url: 'url',
-    });
-
-    assertEquals(
-      embed.json().image!.url,
-      'undefined/external/url?blur',
-    );
-  });
-
-  await test.step('blur 2', () => {
-    const embed = new discord.Embed();
-
-    embed.setImage({
-      blur: true,
-      default: true,
-      proxy: true,
-      size: ImageSize.Medium,
-      url: 'url',
-    });
-
-    assertEquals(
-      embed.json().image!.url,
-      'undefined/external/url?size=medium&blur',
-    );
-  });
 });
 
 Deno.test('thumbnails', async (test) => {
@@ -1243,7 +1109,6 @@ Deno.test('thumbnails', async (test) => {
     const embed = new discord.Embed();
 
     embed.setThumbnail({
-      blur: false,
       default: false,
       proxy: false,
       url: 'url',
@@ -1259,7 +1124,6 @@ Deno.test('thumbnails', async (test) => {
     const embed = new discord.Embed();
 
     embed.setThumbnail({
-      blur: true,
       default: true,
       proxy: true,
       url: 'attachment://image',
@@ -1278,7 +1142,6 @@ Deno.test('thumbnails', async (test) => {
       const embed = new discord.Embed();
 
       embed.setThumbnail({
-        blur: true,
         default: true,
         proxy: true,
         url: 'http://localhost:8080/image',
@@ -1297,7 +1160,6 @@ Deno.test('thumbnails', async (test) => {
     const embed = new discord.Embed();
 
     embed.setThumbnail({
-      blur: false,
       default: false,
       proxy: true,
       url: 'url',
@@ -1313,7 +1175,6 @@ Deno.test('thumbnails', async (test) => {
     const embed = new discord.Embed();
 
     embed.setThumbnail({
-      blur: false,
       default: true,
       proxy: false,
       url: 'url',
@@ -1322,22 +1183,6 @@ Deno.test('thumbnails', async (test) => {
     assertEquals(
       embed.json().thumbnail!.url,
       'undefined/external/url?size=thumbnail',
-    );
-  });
-
-  await test.step('blur', () => {
-    const embed = new discord.Embed();
-
-    embed.setThumbnail({
-      blur: true,
-      default: true,
-      proxy: true,
-      url: 'url',
-    });
-
-    assertEquals(
-      embed.json().thumbnail!.url,
-      'undefined/external/url?size=thumbnail&blur',
     );
   });
 });

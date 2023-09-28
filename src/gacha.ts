@@ -1,17 +1,23 @@
-import { gql, request } from './graphql.ts';
+import '#filter-boolean';
 
 import utils, { ImageSize } from './utils.ts';
 
 import Rating from './rating.ts';
 
-import config, { faunaUrl } from './config.ts';
+import config from './config.ts';
+
+import i18n from './i18n.ts';
 
 import user from './user.ts';
 import search from './search.ts';
 
+import db from '../db/mod.ts';
+
 import packs from './packs.ts';
 
 import * as discord from './discord.ts';
+
+import * as Schema from '../db/schema.ts';
 
 import {
   Character,
@@ -19,15 +25,12 @@ import {
   DisaggregatedCharacter,
   Media,
   MediaRelation,
-  Schema,
 } from './types.ts';
 
-import { NonFetalError, NoPullsError, PoolError } from './errors.ts';
+import { KvError, NonFetalError, NoPullsError, PoolError } from './errors.ts';
 
 export type Pull = {
   index?: number;
-  remaining?: number;
-  guarantees?: number[];
   character: Character;
   media: Media;
   rating: Rating;
@@ -166,18 +169,16 @@ async function guaranteedPool(
 }
 
 async function rngPull(
-  { guildId, userId, guarantee, mutation, extra }: {
+  {
+    guildId,
+    userId,
+    guarantee,
+    sacrifices,
+  }: {
     guildId: string;
     userId?: string;
     guarantee?: number;
-    mutation?: {
-      name: string;
-      query: string;
-    };
-    extra?: {
-      // deno-lint-ignore no-explicit-any
-      [key: string]: any;
-    };
+    sacrifices?: Deno.KvEntry<Schema.Character>[];
   },
 ): Promise<Pull> {
   const { pool, validate } = typeof guarantee === 'number'
@@ -189,7 +190,10 @@ async function rngPull(
       guildId,
     });
 
-  let inventory: Schema.Inventory | undefined = undefined;
+  // let _user: Schema.User | undefined = undefined;
+
+  // let inventory: Schema.Inventory | undefined = undefined;
+  // let inventoryStamp: string | null = null;
 
   let rating: Rating | undefined = undefined;
   let character: Character | undefined = undefined;
@@ -200,14 +204,13 @@ async function rngPull(
 
     const characterId = pool.splice(i, 1)[0].id;
 
-    const results = await packs.characters({ guildId, ids: [characterId] });
-
-    // search will return empty if the character is disabled
-    if (!results.length) {
+    if (packs.isDisabled(characterId, guildId)) {
       continue;
     }
 
-    if (!validate(results[0])) {
+    const results = await packs.characters({ guildId, ids: [characterId] });
+
+    if (!results.length || !validate(results[0])) {
       continue;
     }
 
@@ -220,12 +223,11 @@ async function rngPull(
 
     const edge = candidate.media?.edges?.[0];
 
-    // if no media
-    if (!edge) {
+    if (!edge || !validate(candidate)) {
       continue;
     }
 
-    if (!validate(candidate)) {
+    if (packs.isDisabled(`${edge.node.packId}:${edge.node.id}`, guildId)) {
       continue;
     }
 
@@ -237,71 +239,26 @@ async function rngPull(
 
     // add character to user's inventory
     if (userId) {
-      const _mutation = mutation?.query ?? gql`
-        mutation (
-          $userId: String!
-          $guildId: String!
-          $characterId: String!
-          $mediaId: String!
-          $guaranteed: Boolean!
-          $rating: Int!
-        ) {
-          addCharacterToInventory(
-            userId: $userId
-            guildId: $guildId
-            characterId: $characterId
-            mediaId: $mediaId
-            guaranteed: $guaranteed,
-            rating: $rating
-          ) {
-            ok
-            error
-            inventory {
-              availablePulls
-              rechargeTimestamp
-              user {
-                guarantees
-              }
-            }
-          }
-        }
-      `;
-
-      const response = (await request<{
-        [key: string]: Schema.Mutation;
-      }>({
-        url: faunaUrl,
-        query: _mutation,
-        headers: {
-          'authorization': `Bearer ${config.faunaSecret}`,
-        },
-        variables: {
-          userId,
-          guildId,
+      try {
+        const response = await db.addCharacter({
           characterId,
+          guildId,
+          userId,
           mediaId: `${edge.node.packId}:${edge.node.id}`,
           guaranteed: typeof guarantee === 'number',
           rating: rating.stars,
-          ...extra,
-        },
-      }))[mutation?.name ?? 'addCharacterToInventory'];
+          sacrifices,
+        });
 
-      if (response.ok) {
-        inventory = response.inventory;
-      } else {
-        switch (response.error) {
-          case 'NO_GUARANTEES':
-            throw new Error('403');
-          case 'NO_PULLS_AVAILABLE':
-            throw new NoPullsError(response.inventory.rechargeTimestamp);
-          case 'CHARACTER_NOT_OWNED':
-            throw new NonFetalError('Some of those characters changed hands');
-          // duplicate character
-          case 'CHARACTER_EXISTS':
-            continue;
-          default:
-            throw new Error(response.error);
+        if (!response?.ok) {
+          continue;
         }
+      } catch (err) {
+        if (err instanceof KvError) {
+          continue;
+        }
+
+        throw err;
       }
     }
 
@@ -318,26 +275,23 @@ async function rngPull(
   return {
     rating,
     character,
-    remaining: inventory?.availablePulls,
-    guarantees: inventory?.user?.guarantees,
     media: await packs.aggregate<Media>({ media, guildId }),
   };
 }
 
 async function pullAnimation(
-  { token, ping, userId, guildId, channelId, quiet, mention, guarantee, pull }:
-    {
-      token: string;
-      pull: Pull;
-      channelId: string;
-      userId?: string;
-      guildId?: string;
-      quiet?: boolean;
-      mention?: boolean;
-      guarantee?: number;
-      ping?: boolean;
-    },
+  { token, userId, guildId, quiet, mention, components, pull }: {
+    token: string;
+    pull: Pull;
+    userId?: string;
+    guildId?: string;
+    quiet?: boolean;
+    mention?: boolean;
+    components?: boolean;
+  },
 ): Promise<void> {
+  components ??= true;
+
   const characterId = `${pull.character.packId}:${pull.character.id}`;
 
   const mediaIds = [
@@ -359,8 +313,6 @@ async function pullAnimation(
         .setImage({
           size: ImageSize.Medium,
           url: mediaImage?.url,
-          blur: mediaImage?.nsfw &&
-            !packs.cachedChannels[channelId]?.nsfw,
         }),
     );
 
@@ -394,7 +346,7 @@ async function pullAnimation(
     await utils.sleep(pull.rating.stars + 3);
   }
 
-  message = search.characterMessage(pull.character, channelId, {
+  message = search.characterMessage(pull.character, {
     relations: false,
     rating: pull.rating,
     description: false,
@@ -405,28 +357,14 @@ async function pullAnimation(
     },
   });
 
-  if (userId) {
-    if (
-      typeof guarantee === 'number' &&
-      pull.guarantees?.length &&
-      pull.remaining
-    ) {
-      const next = pull.guarantees?.sort((a, b) => b - a)[0];
+  if (components && userId) {
+    const component = new discord.Component()
+      .setId(quiet ? 'q' : 'gacha', userId)
+      .setLabel(`/${quiet ? 'q' : 'gacha'}`);
 
-      message.addComponents([
-        new discord.Component()
-          .setId('pull', userId, `${next}`)
-          .setLabel(`/pull ${next}`),
-      ]);
-    } else {
-      const component = new discord.Component()
-        .setId(quiet ? 'q' : 'gacha', userId)
-        .setLabel(`/${quiet ? 'q' : 'gacha'}`);
-
-      message.addComponents([
-        component,
-      ]);
-    }
+    message.addComponents([
+      component,
+    ]);
   }
 
   message.addComponents([
@@ -446,28 +384,49 @@ async function pullAnimation(
 
   await message.patch(token);
 
-  if (ping && guildId) {
-    const pings: string[] = [];
+  const background =
+    pull.character.media?.edges?.[0].role === CharacterRole.Background;
 
-    const inventories = await user.getActiveInventories(guildId);
+  if (guildId && userId && !background) {
+    const pings = new Set<string>();
 
-    inventories.forEach(({ user }) => {
+    const guild = await db.getGuild(guildId);
+    const instance = await db.getInstance(guild);
+
+    const inventories = await db.getInstanceInventories(instance);
+
+    inventories.forEach(([, user]) => {
       if (
         user.id !== userId &&
         (
-          user.likes?.map(({ characterId }) => characterId).filter(Boolean)
+          user.likes?.map(({ characterId }) => characterId)
+            .filter(Boolean)
             .includes(characterId) ||
-          user.likes?.map(({ mediaId }) => mediaId).filter(Boolean)
+          user.likes?.map(({ mediaId }) => mediaId)
+            .filter(Boolean)
             .some((id) => mediaIds.includes(id))
         )
       ) {
-        pings.push(`<@${user.id}>`);
+        pings.add(`<@${user.id}>`);
       }
     });
 
-    if (pings.length) {
+    if (pings.size > 0) {
+      const embed = search.characterEmbed(pull.character, {
+        userId,
+        mode: 'thumbnail',
+        rating: true,
+        description: false,
+        footer: true,
+        media: { title: true },
+        existing: {
+          rating: pull.rating.stars,
+        },
+      });
+
       await new discord.Message()
-        .setContent(pings.join(''))
+        .addEmbed(embed)
+        .setContent(Array.from(pings).join(' '))
         .followup(token);
     }
   }
@@ -477,19 +436,23 @@ async function pullAnimation(
  * start the pull's animation
  */
 function start(
-  { token, guildId, channelId, userId, guarantee, mention, quiet }: {
+  { token, guildId, userId, guarantee, mention, quiet }: {
     token: string;
     guildId: string;
-    channelId: string;
     userId?: string;
     guarantee?: number;
     mention?: boolean;
     quiet?: boolean;
   },
 ): discord.Message {
+  const locale = userId
+    ? (user.cachedUsers[userId]?.locale ??
+      user.cachedGuilds[guildId]?.locale)
+    : user.cachedGuilds[guildId]?.locale;
+
   if (!config.gacha) {
     throw new NonFetalError(
-      'Gacha is under maintenance, try again later!',
+      i18n.get('maintenance-gacha', locale),
     );
   }
 
@@ -497,11 +460,8 @@ function start(
     .then((pull) =>
       pullAnimation({
         token,
-        ping: true,
-        channelId,
         userId,
         guildId,
-        guarantee,
         mention,
         quiet,
         pull,
@@ -512,11 +472,13 @@ function start(
         return await new discord.Message()
           .addEmbed(
             new discord.Embed()
-              .setDescription('You don\'t have any more pulls!'),
+              .setDescription(i18n.get('gacha-no-more-pulls', locale)),
           )
           .addEmbed(
             new discord.Embed()
-              .setDescription(`_+1 pull <t:${err.rechargeTimestamp}:R>_`),
+              .setDescription(
+                i18n.get('+1-pull', locale, `<t:${err.rechargeTimestamp}:R>`),
+              ),
           )
           .patch(token);
       }
@@ -525,7 +487,11 @@ function start(
         return await new discord.Message()
           .addEmbed(
             new discord.Embed().setDescription(
-              `You don\`t have any ${guarantee}${discord.emotes.smolStar}pulls`,
+              i18n.get(
+                'gacha-no-guarantees',
+                locale,
+                `${guarantee}${discord.emotes.smolStar}`,
+              ),
             ),
           )
           .addComponents([
@@ -541,11 +507,13 @@ function start(
         return await new discord.Message()
           .addEmbed(
             new discord.Embed().setDescription(
-              `There are no more ${
-                typeof guarantee === 'number'
-                  ? `${guarantee}${discord.emotes.smolStar}`
-                  : ''
-              }characters left`,
+              typeof guarantee === 'number'
+                ? i18n.get(
+                  'gacha-no-more-characters-left',
+                  locale,
+                  `${guarantee}${discord.emotes.smolStar}`,
+                )
+                : i18n.get('gacha-no-more-in-range', locale),
             ),
           ).patch(token);
       }

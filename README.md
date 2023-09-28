@@ -8,17 +8,18 @@
 [![top.gg page](https://top.gg/api/widget/servers/1041970851559522304.svg?noavatar=true)][topgg2]
 
 [![Discord Bot Invite](https://img.shields.io/badge/Add%20Fable%20to%20Your%20Server-blue?logo=discord&logoColor=white)][invite]
-[![Discord Server](https://img.shields.io/discord/992416714497212518?label=discord%20support%20server&color=blue)][discord]
+[![Discord Server](https://img.shields.io/discord/992416714497212518?label=discord%20community%20server&color=blue)][discord]
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ker0olos/fable/deno.yml?branch=main&label=tests)
-[![codecov](https://img.shields.io/codecov/c/gh/ker0olos/fable/main?token=3C7ZTHzGqC)](https://app.codecov.io/github/ker0olos/fable)
+[![Status](https://img.shields.io/endpoint?url=https%3A%2F%2Ffresh-heron-97.deno.dev&logo=instatus)](https://fable.instatus.com/)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ker0olos/fable/deno.yml?branch=main&label=tests&logo=github)
+[![codecov](https://img.shields.io/codecov/c/gh/ker0olos/fable/main?token=3C7ZTHzGqC&label=codecov&logo=codecov)](https://app.codecov.io/github/ker0olos/fable)
+
+[![Kofi](https://img.shields.io/badge/Support%20us%20on%20Ko--fi-orange?logo=ko-fi&logoColor=white)][kofi]
 
 </i>
 
 <i align="center">
-<details><summary>List of features and
-how Fable compares to other bots</summary>
-<img src="https://i.imgur.com/7ZI6dhj.png" alt="120K+ characters">
+<details><summary>List of features and how Fable compares to other bots</summary>
 
 <p>
   <img align="left" src="https://i.imgur.com/IO91qt1.png" alt="100% FREE">
@@ -42,9 +43,9 @@ Fable has no in-app purchases, no premiums, and no bullshit.
 <br clear="left"/>
 
 <p>
-  <img align="left" src="https://i.imgur.com/B897tj4.png" alt="Synthesis">
-  <h4>Synthesis</h4>
-  Synthesis those 2000 characters you have sitting in your inventory doing nothing
+  <img align="left" src="https://i.imgur.com/B897tj4.png" alt="Merging">
+  <h4>Merge</h4>
+  Merge those 200 characters you have sitting in your inventory doing nothing
   to get 2 characters that you might actually like.
 </p>
 
@@ -60,6 +61,15 @@ Fable has no in-app purchases, no premiums, and no bullshit.
 <br clear="left"/>
 <br clear="left"/>
 
+<p>
+  <img align="left" src="https://i.imgur.com/Kbh4IxM.png" alt="Community Packs">
+  <h4>Community Packs</h4>
+  As easy as installing an app on your phone, add community-made character packs to your server, <a href="https://packs.deno.dev/">or create your own.</a>
+</p>
+
+<br clear="left"/>
+<br clear="left"/>
+
 <img src="https://i.imgur.com/y5eV15M.png" alt="Fable compared to other bots">
 
 </details>
@@ -70,24 +80,19 @@ Fable has no in-app purchases, no premiums, and no bullshit.
   <img align="right" width="250" src="https://user-images.githubusercontent.com/52022280/227321932-2ad8d36c-e56c-46e9-91da-161b79eeb029.gif" alt="Animated Pulls">
 </i>
 
-Fable is a free, open-source gacha bot — a friendly, powerful alternative to
-bots like Mudae, Sofi, Karuta. Like those bots, you can pull anime characters,
-customize, and upgrade them.
+Fable is a free, open-source gacha bot — a greate alternative to bots like
+Mudae, Sofi, Karuta. Like those bots, you can pull anime characters, customize,
+and upgrade them.
 
 Unlike those bots, Fable is NOT a cash-grab scam, everything in Fable is free,
 no players can pay to get ahead.
 
-Fable also has an amazing system where anyone can handcraft new characters, or
-add characters that are missing from Fable. Then anyone can find and install the
-packs you make, wanna start creating your own community pack? Visit
+Fable comes with a system where anyone can create new characters, or add
+characters that are missing from Fable. Then publish them for anyone else using
+Fable to install, wanna start creating your own pack? Visit
 <https://packs.deno.dev>
 
 #### [Add Fable to Your Server][invite]
-
-_Please note that **Discord** currently won't notify you after you add Fable or
-any other "app" to your server. Fable also won't show up in your members' list,
-After adding Fable go back to your server and call `/help` to confirm Fable is
-working._
 
 <br clear="right"/>
 
@@ -109,12 +114,23 @@ working._
 - [Roadmap](https://github.com/ker0olos/fable/issues/1)
 - [How to Contribute](https://github.com/ker0olos/fable/wiki)
 - [How to Create Packs](https://packs.deno.dev)
-- [How to Self-host](https://github.com/ker0olos/fable/wiki/Self-hosting)
 - [Discord Support Server][discord]
+- [Dontate (Ko-fi)](https://ko-fi.com/ker0olos)
 
 <br/>
 
 ### FAQ
+
+<details><summary>Fable didn't join my server?</summary>
+<p>
+
+Please note that Fable won't show up in your members' list, After adding Fable
+go back to your server and call `/help` to confirm Fable is working.
+
+This is because Fable is an "app" not a "bot user".
+
+</p>
+</details>
 
 <details><summary>How can I limit Fable to 1 channel?</summary>
 <p>
@@ -140,8 +156,8 @@ you can go tell discord to add custom prefixes to "slash" commands instead of
 <details><summary>How can I install a new pack on my server?</summary>
 <p>
 
-We plan to have a `/packs marketplace` command where you can browse and install
-popular packs but as of right now you need to know a pack id to install it.
+Check `/community popular` to browse the most popular packs or create your own
+pack at <https://packs.deno.dev>
 
 > `Manage Server` permission is required to install packs on "your" server
 
@@ -151,8 +167,8 @@ popular packs but as of right now you need to know a pack id to install it.
 <details><summary>How can I create a new pack?</summary>
 <p>
 
-It's very easy to create and manage your community packs, go to
-<https://packs.deno.dev>
+It's very easy to create and manage your community packs, No coding required. Go
+to <https://packs.deno.dev>
 
 </p>
 </details>
@@ -186,3 +202,4 @@ time, and how many people are working on Fable at any giving moment.
 [topgg]: https://top.gg/bot/1041970851559522304/vote
 [topgg2]: https://top.gg/bot/1041970851559522304
 [invite]: https://fable.deno.dev/invite
+[kofi]: https://ko-fi.com/ker0olos

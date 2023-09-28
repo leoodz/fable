@@ -1,22 +1,20 @@
-import { gql, request } from './graphql.ts';
+import * as discord from './discord.ts';
+
+import user from './user.ts';
+import packs from './packs.ts';
+import search from './search.ts';
+
+import db from '../db/mod.ts';
 
 import utils from './utils.ts';
 
-import config, { faunaUrl } from './config.ts';
-
-import { Manifest, Schema } from './types.ts';
-
 import validate, { purgeReservedProps } from './validate.ts';
 
-import type { PathParams } from 'sift';
+import type { Manifest } from './types.ts';
 
-async function query(
-  req: Request,
-  _: unknown,
-  params: PathParams,
-): Promise<Response> {
+async function query(req: Request): Promise<Response> {
   const { error } = await utils.validateRequest(req, {
-    GET: {},
+    GET: { headers: ['authorization'] },
   });
 
   if (error) {
@@ -26,115 +24,21 @@ async function query(
     );
   }
 
-  const userId = params?.userId;
+  const auth = await utils.fetchWithRetry('https://discord.com/api/users/@me', {
+    method: 'GET',
+    headers: {
+      'content-type': 'application/json',
+      'authorization': req.headers.get('authorization') ?? '',
+    },
+  });
 
-  if (typeof userId !== 'string') {
-    return utils.json(
-      { error: 'invalid user id' },
-      { status: 400 },
-    );
+  if (!auth.ok) {
+    return auth;
   }
 
-  const query = gql`
-    query ($userId: String!) {
-      getPacksByUserId(userId: $userId) {
-        owner
-        version
-        added
-        updated
-        manifest {
-          id
-          title
-          description
-          author
-          image
-          url
-          maintainers
-          media {
-            conflicts
-            new {
-              id
-              type
-              title {
-                english
-                romaji
-                native
-                alternative
-              }
-              format
-              description
-              popularity
-              images {
-                url
-                nsfw
-                artist {
-                  username
-                  url
-                }
-              }
-              externalLinks {
-                url
-                site
-              }
-              trailer {
-                id
-                site
-              }
-              relations {
-                relation
-                mediaId
-              }
-              characters {
-                role
-                characterId
-              }
-            }
-          }
-          characters {
-            conflicts
-            new {
-              id
-              name {
-                english
-                romaji
-                native
-                alternative
-              }
-              description
-              popularity
-              gender
-              age
-              images {
-                url
-                nsfw
-                artist {
-                  username
-                  url
-                }
-              }
-              externalLinks {
-                url
-                site
-              }
-              media {
-                role
-                mediaId
-              }
-            }
-          }
-        }
-      }
-    }
-  `;
+  const { id: userId } = await auth.json();
 
-  const response = (await request<{
-    getPacksByUserId: Schema.Pack[];
-  }>({
-    query,
-    url: faunaUrl,
-    headers: { 'authorization': `Bearer ${config.faunaSecret}` },
-    variables: { userId },
-  })).getPacksByUserId;
+  const response = await db.getPacksByUserId(userId);
 
   return utils.json({
     data: response,
@@ -143,7 +47,7 @@ async function query(
 
 async function publish(req: Request): Promise<Response> {
   const { error, body } = await utils.validateRequest(req, {
-    POST: { body: ['accessToken', 'manifest'] },
+    POST: { body: ['manifest'], headers: ['authorization'] },
   });
 
   if (error) {
@@ -153,8 +57,21 @@ async function publish(req: Request): Promise<Response> {
     );
   }
 
-  const { accessToken, manifest } = body as {
-    accessToken: string;
+  const auth = await utils.fetchWithRetry('https://discord.com/api/users/@me', {
+    method: 'GET',
+    headers: {
+      'content-type': 'application/json',
+      'authorization': req.headers.get('authorization') ?? '',
+    },
+  });
+
+  if (!auth.ok) {
+    return auth;
+  }
+
+  const { id: userId } = await auth.json();
+
+  const { manifest } = body as {
     manifest: Manifest;
   };
 
@@ -169,45 +86,15 @@ async function publish(req: Request): Promise<Response> {
     });
   }
 
-  const auth = await fetch('https://discord.com/api/users/@me', {
-    method: 'GET',
-    headers: {
-      'content-type': 'application/json',
-      'authorization': `Bearer ${accessToken}`,
-    },
-  });
+  try {
+    const _ = await db.publishPack(userId, purgeReservedProps(manifest));
 
-  if (!auth.ok) {
-    return auth;
-  }
-
-  const { id: userId } = await auth.json();
-
-  const mutation = gql`
-    mutation ($userId: String!, $manifest: ManifestInput!) {
-      publishPack(userId: $userId, manifest: $manifest) {
-        ok
-        error
-      }
-    }
-  `;
-
-  const response = await request<{
-    publishPack: Schema.Mutation;
-  }>({
-    url: faunaUrl,
-    query: mutation,
-    headers: {
-      'authorization': `Bearer ${config.faunaSecret}`,
-    },
-    variables: {
-      userId,
-      manifest: purgeReservedProps(manifest),
-    },
-  });
-
-  if (!response.publishPack.ok) {
-    switch (response.publishPack.error) {
+    return new Response(undefined, {
+      status: 200,
+      statusText: 'OK',
+    });
+  } catch (err) {
+    switch (err.message) {
       case 'PERMISSION_DENIED':
         return utils.json({
           error: 'No permission to edit this pack',
@@ -224,16 +111,81 @@ async function publish(req: Request): Promise<Response> {
         });
     }
   }
+}
 
-  return new Response(undefined, {
-    status: 200,
-    statusText: 'OK',
+async function popularPacks(
+  { userId, guildId, index }: {
+    userId: string;
+    guildId: string;
+    index: number;
+  },
+): Promise<discord.Message> {
+  const locale = user.cachedUsers[userId]?.locale;
+
+  const message = new discord.Message();
+
+  const current = await packs.all({ guildId });
+
+  const popularPacks = (await db.popularPacks())
+    .slice(0, 100);
+
+  const pack = popularPacks[index ?? 0];
+
+  const embed = new discord.Embed()
+    .setTitle(`${index + 1}.`)
+    .setFooter({ text: pack.manifest.author })
+    .setThumbnail({
+      url: pack.manifest.image,
+      default: false,
+      proxy: false,
+    }).setDescription(
+      `**${pack.manifest.title ?? pack.manifest.id}**\nin ${
+        utils.compact(pack.servers ?? 0)
+      } servers\n\n${pack.manifest.description ?? ''}`,
+    );
+
+  message.addEmbed(embed);
+
+  if (pack.manifest.characters?.new?.length) {
+    pack.manifest.characters.new.slice(0, 2).forEach((character) => {
+      message.addEmbed(search.characterEmbed(character, {
+        mode: 'thumbnail',
+        description: true,
+        media: { title: false },
+        rating: false,
+        footer: true,
+      }));
+    });
+  }
+
+  if (current.some(({ manifest }) => manifest.id === pack.manifest.id)) {
+    message.addComponents([
+      new discord.Component()
+        .setId('_installed')
+        .setLabel('Installed')
+        .toggle(),
+    ]);
+  } else {
+    message.addComponents([
+      new discord.Component()
+        .setId(discord.join('install', pack.manifest.id))
+        .setLabel('Install'),
+    ]);
+  }
+
+  return discord.Message.page({
+    index,
+    message,
+    type: 'popular',
+    next: index + 1 < popularPacks.length,
+    locale,
   });
 }
 
 const community = {
   query,
   publish,
+  popularPacks,
 };
 
 export default community;

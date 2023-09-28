@@ -1,5 +1,5 @@
 {
-  "$id": "https://fable.deno.dev/character.json",
+  "$id": "https://raw.githubusercontent.com/ker0olos/fable/main/json/character.json",
   "type": "object",
   "title": "character",
   "additionalProperties": false,
@@ -61,7 +61,7 @@
           },
           "url": {
             "type": "string",
-            "pattern": "^(https:\\/\\/)?(www\\.)?(youtube\\.com|twitch\\.tv|crunchyroll\\.com|tapas\\.io|webtoon\\.com|amazon\\.com)[\\S]*$",
+            "pattern": "^(https:\\/\\/)?(www\\.)?(youtube\\.com|twitch\\.tv|crunchyroll\\.com|tapas\\.io|webtoons\\.com|amazon\\.com)[\\S]*$",
             "description": "The full url of the site"
           }
         }

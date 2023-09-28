@@ -1,4 +1,4 @@
-import { gql, request } from '../../src/graphql.ts';
+import { gql, request } from './graphql.ts';
 
 import { AniListCharacter, AniListMedia } from './types.ts';
 
@@ -25,6 +25,7 @@ title {
 }
 genres
 synonyms
+isAdult
 coverImage {
   extraLarge
 }
@@ -250,5 +251,6 @@ export async function characters(
     };
   } = await request({ url, query, variables });
 
-  return data.Page.characters;
+  return data.Page.characters
+    .filter((character) => !character.media?.edges?.[0]?.node?.isAdult);
 }

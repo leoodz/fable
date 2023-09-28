@@ -1,6 +1,8 @@
 import { json } from 'sift';
 
+import i18n from './i18n.ts';
 import utils, { ImageSize } from './utils.ts';
+
 import config from './config.ts';
 
 const splitter = '=';
@@ -9,6 +11,39 @@ enum CommandType {
   CHAT = 1,
   USER = 2,
 }
+
+export type AvailableLocales =
+  // https://discord.com/developers/docs/reference#locales
+  | 'en-US' // English [default, fallback]
+  | 'id' // Indonesian
+  | 'da' // Danish
+  | 'de' // German
+  | 'es-ES' // Spanish
+  | 'fr' // French
+  | 'hr' // Croatian
+  | 'it' // Italian
+  | 'lt' // Lithuanian
+  | 'hu' // Hungarian
+  | 'nl' // Dutch
+  | 'no' // Norwegian
+  | 'pl' // Polish
+  | 'pt-BR' // Portuguese, Brazilian
+  | 'ro' // Romanian, Romania
+  | 'fi' // Finnish,
+  | 'sv-SE' // Swedish
+  | 'vi' // Vietnamese
+  | 'tr' // Turkish
+  | 'cs' // Czech
+  | 'el' // Greek
+  | 'bg' // Bulgarian
+  | 'ru' // Russian
+  | 'uk' // Ukrainian
+  | 'hi' // Hindi
+  | 'th' // Thai
+  | 'zh-CN' // Chinese, China
+  | 'ja' // Japanese
+  | 'zh-TW' // Chinese, Taiwan
+  | 'ko'; // Korean
 
 export const empty = '\u200B';
 
@@ -25,6 +60,10 @@ export const emotes = {
   add: '<:add:1099004747123523644>',
   all: '<:all:1107511909999181824>',
   liked: '<:liked:1110491720375873567>',
+  member: '<:partymember:1135706921312206921>',
+  alive: '<:alive:1128724907245711452>',
+  outOfHP: '<:outofhp:1131872032456446053>',
+  outOfSta: '<:outofstamina:1128724910609551481>',
 };
 
 export const join = (...args: string[]): string => {
@@ -89,12 +128,6 @@ export type Option = {
   description?: string;
   default?: boolean;
   emote?: Emote;
-};
-
-export type Channel = {
-  id: string;
-  nsfw: boolean;
-  name: string;
 };
 
 export type Member = {
@@ -215,7 +248,6 @@ export class Interaction<Options> {
   type: InteractionType;
 
   guildId: string;
-  channelId: string;
   targetId?: string;
 
   resolved?: Resolved;
@@ -243,14 +275,11 @@ export class Interaction<Options> {
   /** member is sent when the interaction is invoked in a guild */
   member: Member;
 
-  /** channel is sent when the interaction is invoked in a guild */
-  channel: Channel;
+  /** available on all interaction types except PING */
+  locale?: AvailableLocales;
 
-  // /** available on all interaction types except PING */
-  // locale?: string;
-
-  // /** guild's preferred locale (if invoked in a guild) */
-  // guildLocale?: string;
+  /** guild's preferred locale (if invoked in a guild) */
+  guildLocale?: AvailableLocales;
 
   constructor(body: string) {
     const obj = JSON.parse(body);
@@ -259,7 +288,6 @@ export class Interaction<Options> {
       type: number;
       name: string;
       guild_id: string;
-      channel_id: string;
       resolved?: Resolved;
       target_id?: string;
       values?: string[];
@@ -291,15 +319,13 @@ export class Interaction<Options> {
     this.reference = obj.message;
 
     this.guildId = obj.guild_id;
-    this.channelId = obj.channel_id;
 
     // this.user = obj.user;
     // this.message = obj?.message
     this.member = obj.member;
-    this.channel = obj.channel;
 
-    // this.locale = obj.locale;
-    // this.guildLocale = obj.guild_locale;
+    this.locale = obj.locale;
+    this.guildLocale = obj.guild_locale;
 
     this.options = {};
 
@@ -397,6 +423,11 @@ export class Component {
 
   setLabel(label: string): Component {
     this.#data.label = label;
+    return this;
+  }
+
+  setDisabled(disabled: boolean): Component {
+    this.#data.disabled = disabled;
     return this;
   }
 
@@ -525,15 +556,17 @@ export class Embed {
     return this;
   }
 
+  getFieldsCount(): number {
+    return this.#data.fields?.length ?? 0;
+  }
+
   setImage(image: {
     url?: string;
     default?: boolean;
     proxy?: boolean;
     size?: ImageSize;
-    blur?: boolean;
   }): Embed {
     const size = image.size === ImageSize.Medium ? '?size=medium' : '';
-    const blur = image.blur ? size.length ? '&blur' : '?blur' : '';
 
     image.default = image.default ?? true;
     image.proxy = image.proxy ?? true;
@@ -552,7 +585,7 @@ export class Embed {
         this.#data.image = {
           url: `${config.origin}/external/${
             encodeURIComponent(image.url ?? '')
-          }${size}${blur}`,
+          }${size}`,
         };
       }
     }
@@ -565,11 +598,8 @@ export class Embed {
       preview?: boolean;
       default?: boolean;
       proxy?: boolean;
-      blur?: boolean;
     },
   ): Embed {
-    const blur = thumbnail.blur ? '&blur' : '';
-
     thumbnail.default = thumbnail.default ?? true;
     thumbnail.proxy = thumbnail.proxy ?? true;
 
@@ -587,7 +617,7 @@ export class Embed {
         this.#data.thumbnail = {
           url: `${config.origin}/external/${
             encodeURIComponent(thumbnail.url ?? '')
-          }?size=${thumbnail.preview ? 'preview' : 'thumbnail'}${blur}`,
+          }?size=${thumbnail.preview ? 'preview' : 'thumbnail'}`,
         };
       }
     }
@@ -643,6 +673,14 @@ export class Message {
     };
   }
 
+  clone(): Message {
+    const cloned = new Message();
+    cloned.#files = [...this.#files];
+    cloned.#data.attachments = [...this.#data.attachments];
+    cloned.#data.embeds = [...this.#data.embeds];
+    return cloned;
+  }
+
   setType(type: MessageType): Message {
     this.#type = type;
     return this;
@@ -674,28 +712,28 @@ export class Message {
     return this;
   }
 
-  addAttachment(
-    { arrayBuffer, filename, type }: {
-      arrayBuffer: ArrayBuffer;
-      filename: string;
-      type: string;
-    },
-  ): Message {
+  addAttachment({ arrayBuffer, filename, type }: {
+    arrayBuffer: ArrayBuffer;
+    filename: string;
+    type: string;
+  }): Message {
     if (!this.#data.attachments) {
       this.#data.attachments = [];
     }
 
     this.#data.attachments.push({
-      id: `${this.#data.attachments.length}`,
       filename,
+      id: `${this.#data.attachments.length}`,
     });
 
-    this.#files.push(
-      new File([arrayBuffer], filename, {
-        type,
-      }),
-    );
+    this.#files.push(new File([arrayBuffer], filename, { type }));
 
+    return this;
+  }
+
+  clearAttachments(): Message {
+    this.#files = [];
+    this.#data.attachments = [];
     return this;
   }
 
@@ -704,6 +742,24 @@ export class Message {
     if (this.#data.embeds.length < 10) {
       this.#data.embeds.push(embed.json());
     }
+
+    return this;
+  }
+
+  replaceEmbed(index: number, embed: Embed): Message {
+    this.#data.embeds[index] = embed.json();
+
+    return this;
+  }
+
+  insertEmbed(index: number, embed: Embed): Message {
+    this.#data.embeds.splice(index, 0, embed.json());
+
+    return this;
+  }
+
+  deleteEmbeds(index: number, deleteCount?: number): Message {
+    this.#data.embeds.splice(index, deleteCount ?? 1);
 
     return this;
   }
@@ -835,11 +891,12 @@ export class Message {
       formData.append(`files[${index}]`, blob, name);
     });
 
-    const response = await fetch(url, { method, body: formData });
+    const response = await utils.fetchWithRetry(url, {
+      method,
+      body: formData,
+    });
 
-    if (config.deploy) {
-      console.log(method, response?.status, response?.statusText);
-    }
+    console.log(method, response?.status, response?.statusText);
 
     if (response?.status === 429) {
       const extra = {
@@ -909,13 +966,14 @@ export class Message {
   }
 
   static page(
-    { message, type, target, index, total, next }: {
+    { message, type, target, index, total, next, locale }: {
       type: string;
       message: Message;
       index: number;
       target?: string;
       next?: boolean;
       total?: number;
+      locale?: AvailableLocales;
     },
   ): Message {
     const group: Component[] = [];
@@ -929,7 +987,7 @@ export class Message {
       group.push(
         new Component()
           .setId(type, target ?? '', `${prevId}`, 'prev')
-          .setLabel(`Prev`),
+          .setLabel(i18n.get('prev', locale)),
       );
     }
 
@@ -945,35 +1003,9 @@ export class Message {
       group.push(
         new Component()
           .setId(type, target ?? '', `${nextId}`, 'next')
-          .setLabel(`Next`),
+          .setLabel(i18n.get('next', locale)),
       );
     }
-
-    return message.insertComponents(group);
-  }
-
-  static anchor(
-    { message, type, target, id, anchor }: {
-      id: string;
-      target: string | number;
-      type: string;
-      anchor: string;
-      message: Message;
-    },
-  ): Message {
-    const group: Component[] = [];
-
-    group.push(
-      new Component()
-        .setId(type, `${target}`, id, `${anchor}`, 'prev')
-        .setLabel(`Prev`),
-    );
-
-    group.push(
-      new Component()
-        .setId(type, `${target}`, id, `${anchor}`, 'next')
-        .setLabel(`Next`),
-    );
 
     return message.insertComponents(group);
   }
@@ -988,6 +1020,7 @@ export class Message {
       cancelText,
       userId,
       targetId,
+      locale,
     }: {
       type?: string;
       userId?: string;
@@ -997,14 +1030,15 @@ export class Message {
       message: Message;
       confirmText?: string;
       cancelText?: string;
+      locale?: AvailableLocales;
     },
   ): Message {
     const confirmComponent = new Component()
-      .setLabel(confirmText ?? 'Confirm');
+      .setLabel(confirmText ?? i18n.get('confirm', locale));
 
     const cancelComponent = new Component()
       .setStyle(ButtonStyle.Red)
-      .setLabel(cancelText ?? 'Cancel');
+      .setLabel(cancelText ?? i18n.get('cancel', locale));
 
     if (Array.isArray(confirm)) {
       confirmComponent.setId(...confirm);

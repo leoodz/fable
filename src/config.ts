@@ -1,41 +1,39 @@
 import { load as Dotenv } from '$std/dotenv/mod.ts';
 
-export const faunaUrl = 'https://graphql.us.fauna.com/graphql';
-
 const config: {
   deploy: boolean;
   appId?: string;
   publicKey?: string;
-  faunaSecret?: string;
-  imageProxyUrl?: string;
   topggCipher?: number;
   topggSecret?: string;
   sentry?: string;
   instatus?: string;
   origin?: string;
   notice?: string;
+  global?: boolean;
   gacha?: boolean;
   trading?: boolean;
   stealing?: boolean;
   synthesis?: boolean;
   communityPacks?: boolean;
+  combat?: boolean;
 } = {
   deploy: false,
   appId: undefined,
   publicKey: undefined,
-  faunaSecret: undefined,
-  imageProxyUrl: undefined,
   topggCipher: undefined,
   topggSecret: undefined,
   sentry: undefined,
   instatus: undefined,
   origin: undefined,
   notice: undefined,
+  global: undefined,
   gacha: undefined,
   trading: undefined,
   stealing: undefined,
   synthesis: undefined,
   communityPacks: undefined,
+  combat: undefined,
 };
 
 export async function initConfig(): Promise<void> {
@@ -45,9 +43,12 @@ export async function initConfig(): Promise<void> {
     config.deploy = !!Deno.env.get('DENO_DEPLOYMENT_ID');
 
     // load .env file
-    if (!config.deploy) {
-      await Dotenv({ export: true, allowEmptyValues: true });
-    }
+    await Dotenv({
+      export: true,
+      defaultsPath: '.env.example',
+      allowEmptyValues: true,
+      examplePath: null,
+    });
 
     config.sentry = Deno.env.get('SENTRY_DSN');
     config.instatus = Deno.env.get('INSTATUS_WEBHOOK');
@@ -56,15 +57,15 @@ export async function initConfig(): Promise<void> {
 
     config.publicKey = Deno.env.get('PUBLIC_KEY');
 
-    config.faunaSecret = Deno.env.get('FAUNA_SECRET');
-    config.imageProxyUrl = Deno.env.get('IMAGE_PROXY_URL');
-
     config.topggCipher = Number(Deno.env.get('TOPGG_WEBHOOK_CIPHER'));
     config.topggSecret = Deno.env.get('TOPGG_WEBHOOK_SECRET');
 
     config.notice = Deno.env.get('NOTICE');
 
     // feature flags
+    config.global = !Deno.env.has('GLOBAL') ||
+      Deno.env.get('GLOBAL') === '1';
+
     config.gacha = !Deno.env.has('GACHA') ||
       Deno.env.get('GACHA') === '1';
 
@@ -79,6 +80,9 @@ export async function initConfig(): Promise<void> {
 
     config.communityPacks = !Deno.env.has('COMMUNITY_PACKS') ||
       Deno.env.get('COMMUNITY_PACKS') === '1';
+
+    config.combat = !Deno.env.has('COMBAT') ||
+      Deno.env.get('COMBAT') === '1';
 
     config.origin = undefined;
   }
